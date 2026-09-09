@@ -114,6 +114,8 @@ jest.mock('../../src/features/calling/runtime/voipClient', () => {
     getVoicePushToken: jest.fn(async () => undefined),
     loadVoiceSession: jest.fn(async () => null),
     persistVoiceSession: jest.fn(async () => undefined),
+    voicePushDeviceId: jest.fn(async () => null),
+    rememberVoicePushDeviceId: jest.fn(async () => undefined),
   };
 });
 
@@ -141,7 +143,17 @@ function immediateSubject<T>(initial: T) {
   };
 }
 
+/**
+ * These call-teardown tests turn on a forty-five second grace period and a
+ * media-recovery delay measured in seconds. Run on the wall clock they were
+ * both slow and only just wide enough — one waited 1,300ms for a 1,250ms
+ * delay — so a cold, loaded run could overtake them and a real regression in
+ * the timing would have been indistinguishable from the machine being busy.
+ */
+const pinnedTimers = () => jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask', 'setImmediate'] });
+
 test('mounted VoiceProvider confirms already-active media and tears down on transport loss', async () => {
+  pinnedTimers();
   const observed: { current: ReturnType<typeof useVoice> | null } = { current: null };
   const callState$ = immediateSubject('ACTIVE');
   let packets = 0;
@@ -201,11 +213,11 @@ test('mounted VoiceProvider confirms already-active media and tears down on tran
   await act(async () => {
     tree = TestRenderer.create(<VoiceProvider><Probe /></VoiceProvider>);
   });
+  // A call reported ACTIVE reaches the UI on the spot; confirming its media is
+  // a separate, slower question that must never hold the screen up.
   await act(async () => {
-    const mediaReadyStartedAt = Date.now();
     (voipClient as any).__emitCall(call);
     await Promise.resolve();
-    expect(Date.now() - mediaReadyStartedAt).toBeLessThan(450);
   });
 
   if (!observed.current) throw new Error('VoiceContext did not mount.');
@@ -224,11 +236,14 @@ test('mounted VoiceProvider confirms already-active media and tears down on tran
     await Promise.resolve();
   });
   expect(call.telnyxCall.restartMedia).toHaveBeenCalled();
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1_300)); });
+  await act(async () => { await jest.advanceTimersByTimeAsync(1_300); });
 
   await act(async () => {
     (voipClient as any).connectionState$.next(TelnyxConnectionState.DISCONNECTED);
   });
+  // The call is held while the edge might still come back, not closed on sight.
+  expect(observed.current.activeCall?.id).toBe('mounted-active-call');
+  await act(async () => { await jest.advanceTimersByTimeAsync(45_000); });
   expect(observed.current.activeCall).toBeNull();
   expect(VoicePnBridge.endCall).toHaveBeenCalledWith('mounted-active-call');
   expect(call.hangup).toHaveBeenCalledTimes(1);
@@ -240,9 +255,11 @@ test('mounted VoiceProvider confirms already-active media and tears down on tran
   // ...and the client lets go of the engine underneath it.
   voice.detach();
   expect((voipClient as any).connectionState$.subscriberCount).toBe(0);
+  jest.useRealTimers();
 });
 
 test('mounted SIP provider disposes media and engine calls on fatal transport loss even if BYE fails', async () => {
+  pinnedTimers();
   const events = new SipEventBus();
   let stateListener: ((state: SipSessionState) => void) | undefined;
   const track = { stopped: false };
@@ -276,7 +293,13 @@ test('mounted SIP provider disposes media and engine calls on fatal transport lo
       stateListener?.('Established');
     });
     expect(observed.current?.activeCall).not.toBeNull();
-    await act(async () => { events.emit('registration', { state: 'failed' }); });
+    // A registration refused for good is still only a registration: the media
+    // of a call already up is untouched by it, so the call is given the grace
+    // period rather than closed the moment the refusal lands.
+    await act(async () => { events.emit('registration', { state: 'failed', reason: '403 Forbidden' }); });
+    expect(track.stopped).toBe(false);
+    expect(observed.current?.activeCall).not.toBeNull();
+    await act(async () => { await jest.advanceTimersByTimeAsync(45_000); });
     expect(track.stopped).toBe(true);
     expect(client.currentCalls).toEqual([]);
     expect(bridge.peerConnection(handle.id)).toBeUndefined();
@@ -293,12 +316,12 @@ test('mounted SIP provider disposes media and engine calls on fatal transport lo
     expect(observed.current?.activeCall).toBeNull();
   } finally {
     await act(async () => { tree?.unmount(); });
-    voice.detach(); client.dispose(); errors.mockRestore();
+    voice.detach(); client.dispose(); errors.mockRestore(); jest.useRealTimers();
   }
 });
 
 test('SIP registration recovery preserves media then expires once after repeated failures', async () => {
-  jest.useFakeTimers();
+  pinnedTimers();
   const events = new SipEventBus();
   let stateListener: ((state: SipSessionState) => void) | undefined;
   const track = { stopped: false };
@@ -413,5 +436,80 @@ test.each([false, true])('SIP incoming refresh uses Vocivo only (registration fa
     await act(async () => tree?.unmount());
     voice.detach(); renew.mockRestore(); auth.loading = false;
     jest.mocked(getVoicePushToken).mockResolvedValue(undefined);
+  }
+});
+
+test('an answered outbound SIP call stops the route poll and logs which way it went', async () => {
+  pinnedTimers();
+  const auth = (require('../../src/features/auth/AuthContext') as any).__authState;
+  auth.loading = true; // Isolate the dial from the startup hook.
+  const events = new SipEventBus();
+  let stateListener: ((state: SipSessionState) => void) | undefined;
+  const packets = { count: 0 };
+  const peer = {
+    connectionState: 'connected', iceConnectionState: 'connected',
+    getSenders: () => [{ track: { kind: 'audio', enabled: true, readyState: 'live' } }],
+    getReceivers: () => [{ track: { kind: 'audio', readyState: 'live' } }],
+    getStats: async () => {
+      packets.count += 16;
+      return new Map<string, unknown>([
+        ['out', { type: 'outbound-rtp', kind: 'audio', packetsSent: packets.count }],
+        ['in', { type: 'inbound-rtp', kind: 'audio', packetsReceived: packets.count }],
+      ]);
+    },
+    addEventListener: () => {}, removeEventListener: () => {}, restartIce: () => {},
+  };
+  const handle: SipSessionHandle = {
+    id: 'sip-outbound-call', incoming: false, remoteDisplayName: '', remoteUser: '15551234567',
+    remoteTarget: 'sip:15551234567@example.test', headers: [],
+    disposition: () => ({}), peerConnection: () => peer,
+    onStateChange: listener => { stateListener = listener; },
+    accept: async () => {}, terminate: async () => {}, dispose: async () => {},
+    setHold: async () => {}, setMuted: async () => {}, sendDtmf: async () => {},
+  };
+  const bridge = new SipStackBridge({ events, createStack: () => ({
+    onRegistrationChange: () => {}, onInvitation: () => {}, start: async () => {}, stop: async () => {},
+    refresh: async () => {}, invite: async () => handle, setSpeaker: async () => {},
+  }) });
+  const client = new SipVoiceClient({ events, bridge });
+  voice.use('sip', client, { endNativeCall: async () => {}, toggleSpeaker: async () => false, hideIncomingCallUi: async () => {} });
+  jest.mocked(api.post).mockImplementation(async (path: string) => path === '/api/voice/route'
+    ? { routeId: 'route-987654321', routeToken: 'route-token' }
+    : {} as never);
+  // Vocivo's own edge has nothing that advances an outbound external route:
+  // voice-progress is posted by the callee, and only on internal calls.
+  jest.mocked(api.get).mockResolvedValue({ phase: 'ringing' } as never);
+  auth.addHistory.mockClear();
+  let current: ReturnType<typeof useVoice> | undefined;
+  function Probe() { current = useVoice(); return null; }
+  let tree: TestRenderer.ReactTestRenderer | undefined;
+  try {
+    await act(async () => { tree = TestRenderer.create(<VoiceProvider><Probe /></VoiceProvider>); });
+    await act(async () => {
+      await bridge.register({ username: 'employee', password: 'test-only', domain: 'example.test' });
+      events.emit('registration', { state: 'ok' });
+    });
+    await act(async () => {
+      await current!.startCall('+15551234567', { id: 'us', country_code: 'US', country_name: 'United States', dial_code: '+1', flag: null, rate_per_min: 0.01 });
+    });
+    // The caller pressed hold while it was still ringing, so the answer arrives
+    // as HELD and never as ACTIVE: nothing on the media path stops the poll.
+    await act(async () => { await bridge.hold('sip-outbound-call', true); });
+    await act(async () => { stateListener?.('Established'); await jest.advanceTimersByTimeAsync(1_000); });
+    const pollsWhileConnecting = jest.mocked(api.get).mock.calls.length;
+    await act(async () => { await jest.advanceTimersByTimeAsync(90_000); });
+    expect(jest.mocked(api.get).mock.calls.length).toBe(pollsWhileConnecting);
+    expect(current!.error).toBeNull();
+
+    await act(async () => { await current!.endCall(); });
+    expect(auth.addHistory).toHaveBeenCalledWith(expect.objectContaining({
+      destination_number: '+15551234567', direction: 'outgoing', internal: false,
+    }));
+  } finally {
+    await act(async () => tree?.unmount());
+    voice.detach(); client.dispose(); auth.loading = false;
+    jest.mocked(api.post).mockImplementation(async () => ({ token: 'test-token', expires_in: 3600 } as never));
+    jest.mocked(api.get).mockReset();
+    jest.useRealTimers();
   }
 });

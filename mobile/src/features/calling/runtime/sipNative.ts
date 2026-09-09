@@ -41,6 +41,8 @@ let registrationOperation: { renewed: boolean } | null = null;
 let queuedRenewal: Promise<number> | null = null;
 let registeredConfig: SipStackConfig | null = null;
 let registrationEpoch = 0;
+const pushTokenListeners = new Set<(token: string) => void>();
+let issuedPushToken: string | null = null;
 const sipSessionKey = 'vocivo.secure.sip-session.v1';
 const sipDeviceKey = 'vocivo.secure.sip-device.v1';
 type CachedSipSession = { sessionToken: string; config: SipStackConfig; expiresAt: number; deviceId: string; credentialId: string };
@@ -138,6 +140,19 @@ function ensureBridge() {
   bus = events;
   bridge = created;
   return { bridge: created, bus: events };
+}
+
+/**
+ * Says when PushKit has issued or rotated this device's VoIP token.
+ *
+ * The token is minted by the OS at its own pace, and there is no asking for it
+ * again — so the only alternatives are being told, or polling until it appears.
+ * A late subscriber is given the token already in hand.
+ */
+export function onVocivoPushToken(listener: (token: string) => void) {
+  pushTokenListeners.add(listener);
+  if (issuedPushToken) listener(issuedPushToken);
+  return { remove: () => { pushTokenListeners.delete(listener); } };
 }
 
 /** Final registration outcomes, including rejection codes, for credential recovery. */
@@ -277,6 +292,10 @@ export function createSipVoiceClient(): SipVoiceClient {
       bridge: sipBridge,
       native,
       ui: new NativeEventEmitter(NativeModules.VocivoSip) as unknown as CallUiEventSource,
+      onPushToken: (token: string) => {
+        issuedPushToken = token;
+        pushTokenListeners.forEach(listener => listener(token));
+      },
       onPushWake: async () => {
         // The native signed-in gate already ran; the API/cache is still bound
         // to this device's current authenticated session, never to push fields.

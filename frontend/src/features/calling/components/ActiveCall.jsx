@@ -14,6 +14,10 @@ export function ActiveCall({ voice, number, elapsed, selectedNumber, profile }) 
   const [busy, setBusy] = useState(false);
   const [toolError, setToolError] = useState('');
   const status = voice.connected ? (voice.state === 'held' ? 'ON HOLD' : voice.conference ? 'CONFERENCE' : 'LIVE CALL') : 'CALLING';
+  // This screen is only mounted for an active call, and both edges define that
+  // as a call that is not an unanswered incoming one. Asking for voice.incoming
+  // as well meant the flag was always false here and Transfer never enabled.
+  const canTransfer = voice.canTransfer !== false && Boolean(profile?.extension) && !voice.conference;
   const openTool = async (next) => {
     setTool(next); setToolError(''); setTarget('');
     if (next === 'transfer') {
@@ -62,7 +66,7 @@ export function ActiveCall({ voice, number, elapsed, selectedNumber, profile }) 
           <button className="control" disabled={!voice.connected || voice.heldCall || voice.conference || voice.canAddCaller === false} onClick={() => openTool('add')} title="Add caller"><UserPlus /><span>Add caller</span></button>
           <button className="control" disabled={!voice.heldCall || voice.conference || busy} onClick={() => action(voice.swapCalls)} title="Swap calls"><ArrowLeftRight /><span>Swap</span></button>
           <button className={voice.conference ? 'control active' : 'control'} disabled={!voice.canMerge || busy} onClick={() => action(voice.mergeCalls)} title="Merge calls"><Merge /><span>Merge</span></button>
-          <button className="control" disabled={!voice.connected || !voice.incoming || !profile?.extension || voice.conference || voice.canTransfer === false} onClick={() => openTool('transfer')} title="Transfer call"><PhoneForwarded /><span>Transfer</span></button>
+          <button className="control" disabled={!voice.connected || !canTransfer} onClick={() => openTool('transfer')} title="Transfer call"><PhoneForwarded /><span>Transfer</span></button>
           <button className={voice.conference ? 'control active' : 'control'} disabled={!voice.conference} onClick={() => openTool('participants')} title="Conference participants"><UserMinus /><span>Participants</span></button>
           <button className={voice.audioBlocked ? 'control attention' : 'control'} disabled={!voice.connected || busy} onClick={() => action(voice.resumeAudio)} title={voice.audioBlocked ? 'Resume browser audio' : 'Refresh browser audio'}><Volume2 /><span>{voice.audioBlocked ? 'Resume audio' : 'Audio'}</span></button>
         </div>

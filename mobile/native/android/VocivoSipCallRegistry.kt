@@ -2,6 +2,7 @@ package app.vocivo.sip
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.telecom.DisconnectCause
 import android.os.Handler
 import android.os.Looper
@@ -56,6 +57,45 @@ object VocivoSipCallRegistry {
 
   @Synchronized
   fun hasCalls() = connections.isNotEmpty() || deadlines.isNotEmpty()
+
+  // The microphone mute and the communication audio mode are device-wide
+  // settings, not per-call ones. Vocivo used to set both and restore neither,
+  // so a call ended while muted left the microphone muted for every other app
+  // on the phone until it was rebooted, and the phone stayed in call audio mode
+  // long after the call.
+  private var mutedMicrophone = false
+  private var claimedAudioMode = false
+
+  private fun audioManager(context: Context) =
+    context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
+  @Synchronized
+  fun setMicrophoneMuted(context: Context, muted: Boolean) {
+    application = context.applicationContext
+    audioManager(context)?.isMicrophoneMute = muted
+    mutedMicrophone = muted
+  }
+
+  @Synchronized
+  fun setSpeakerphone(context: Context, on: Boolean) {
+    application = context.applicationContext
+    val manager = audioManager(context) ?: return
+    manager.mode = AudioManager.MODE_IN_COMMUNICATION
+    claimedAudioMode = true
+    @Suppress("DEPRECATION")
+    manager.isSpeakerphoneOn = on
+  }
+
+  /** Gives the device's audio back to whatever else is using the phone. */
+  @Synchronized
+  fun releaseAudio() {
+    val context = application ?: return
+    val manager = audioManager(context) ?: return
+    if (mutedMicrophone) manager.isMicrophoneMute = false
+    mutedMicrophone = false
+    if (claimedAudioMode && manager.mode == AudioManager.MODE_IN_COMMUNICATION) manager.mode = AudioManager.MODE_NORMAL
+    claimedAudioMode = false
+  }
 
   /** Events raised before the JavaScript runtime attached. */
   private val pending = ArrayDeque<Pair<String, WritableMap>>()
@@ -113,8 +153,15 @@ object VocivoSipCallRegistry {
     }
   }
 
+  /**
+   * `context` is what lets the registry clean up after a call it did not
+   * `prepare`: a dialled call never goes through the incoming path, so without
+   * this the application context was null and its foreground service and audio
+   * mode were never given back.
+   */
   @Synchronized
-  fun register(callId: String, connection: VocivoConnection) {
+  fun register(context: Context, callId: String, connection: VocivoConnection) {
+    application = context.applicationContext
     if (ended.contains(callId)) { connection.finish(DisconnectCause.CANCELED); return }
     connections[callId] = connection
   }
@@ -130,7 +177,10 @@ object VocivoSipCallRegistry {
     if (ended.size > 128) ended.remove(ended.first())
     application?.let { context ->
       VocivoSipCallNotification.cancel(context, callId)
-      if (!hasCalls()) context.stopService(Intent(context, VocivoSipCallService::class.java))
+      if (!hasCalls()) {
+        releaseAudio()
+        context.stopService(Intent(context, VocivoSipCallService::class.java))
+      }
     }
   }
 

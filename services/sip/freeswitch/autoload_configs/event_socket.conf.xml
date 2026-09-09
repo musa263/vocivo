@@ -1,13 +1,21 @@
 <!-- fs_cli and the ops actions talk to this from inside the container; nothing
      else may. The vanilla file listens on every address, and this host has no
      firewall in front of the switch. The receptionist is reached the other way
-     round (FreeSWITCH connects out to it), so it does not need this. -->
+     round (FreeSWITCH connects out to it), so it does not need this.
+
+     The password is written by docker-entrypoint.sh, fresh on every start, and
+     shared with nothing but the fs_cli configuration beside it. It used to be
+     the stock ClueCon, guarded only by the loopback bind — but every container
+     in this stack is network_mode: host, so the speech engine and the
+     receptionist sit on the same loopback, and a compromised Python dependency
+     in either of them would have had a switch console: originate calls,
+     uuid_record any channel, run system commands. -->
 <configuration name="event_socket.conf" description="Socket Client">
   <settings>
     <param name="nat-map" value="false"/>
     <param name="listen-ip" value="127.0.0.1"/>
     <param name="listen-port" value="8021"/>
-    <param name="password" value="ClueCon"/>
+    <param name="password" value="$${VOCIVO_ESL_PASSWORD}"/>
     <param name="apply-inbound-acl" value="loopback.auto"/>
   </settings>
 </configuration>

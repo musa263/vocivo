@@ -15,6 +15,7 @@ import android.content.Context
  */
 class VocivoConnection(private val callId: String, private val context: Context) : Connection() {
   private var answering = false
+  private var mirroredMute: Boolean? = null
   private val main = android.os.Handler(android.os.Looper.getMainLooper())
   private val answerDeadline = Runnable {
     VocivoSipCallRegistry.emit("callUiEnd", "callId" to callId)
@@ -75,14 +76,22 @@ class VocivoConnection(private val callId: String, private val context: Context)
   }
 
   override fun onCallAudioStateChanged(state: CallAudioState) {
-    VocivoSipCallRegistry.emit(
-      "callUiMute",
-      "callId" to callId,
-      "muted" to state.isMuted,
-    )
+    // Telecom reports our own mute back to us along with every route change.
+    // Passing that on made the engine mute a second time and, on a route change
+    // during a muted call, unmute one the user had asked to keep muted.
+    if (mirroredMute == state.isMuted) {
+      mirroredMute = null
+    } else {
+      VocivoSipCallRegistry.emit(
+        "callUiMute",
+        "callId" to callId,
+        "muted" to state.isMuted,
+      )
+    }
     VocivoSipCallRegistry.emit(
       "callUiAudioSession",
       "callId" to callId,
+      "active" to true,
       "route" to when (state.route) {
         CallAudioState.ROUTE_SPEAKER -> "speaker"
         CallAudioState.ROUTE_BLUETOOTH -> "bluetooth"
@@ -90,6 +99,11 @@ class VocivoConnection(private val callId: String, private val context: Context)
         else -> "earpiece"
       },
     )
+  }
+
+  /** The engine muted or unmuted; remember it so Telecom's echo is not a command. */
+  fun applyMuted(muted: Boolean) {
+    mirroredMute = muted
   }
 
   /** Called by the module when SIP — not the user — ended the call. */

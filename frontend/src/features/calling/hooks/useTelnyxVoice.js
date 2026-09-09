@@ -138,7 +138,10 @@ export function useTelnyxVoice(token, enabled, identity = {}) {
   }, []);
   const startIncomingRingtone = useCallback((incoming) => {
     if (!incomingToneRef.current) {
-      const tone = new Audio('/audio/ringback.wav');
+      // A phone ringing sounds different from a phone being rung: on the
+      // ringback asset an incoming call was indistinguishable from a call this
+      // phone was placing.
+      const tone = new Audio('/audio/ringtone.wav');
       tone.loop = true;
       tone.volume = 0.72;
       incomingToneRef.current = tone;

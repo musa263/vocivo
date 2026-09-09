@@ -46,6 +46,15 @@ export type CallUiEventMap = {
    * server is holding.
    */
   callUiPushWake: { callId: string; callerName?: string; callerNumber?: string; expiresAt?: string };
+  /**
+   * The OS moved the call audio itself: CallKit activating or deactivating the
+   * session, or Android reporting the route a car kit or headset took. The two
+   * platforms know different halves of it, so both are optional; whoever binds
+   * this uses whichever half arrived.
+   */
+  callUiAudioSession: { callId?: string; active: boolean; route?: 'earpiece' | 'speaker' | 'bluetooth' | 'headset' };
+  /** iOS: PushKit issued or rotated the VoIP token this device is reachable on. */
+  callUiPushToken: { token: string };
 };
 
 export type CallUiEventName = keyof CallUiEventMap;
@@ -75,9 +84,11 @@ export function bindCallUi(options: {
   native: NativeCallUi;
   ui: CallUiEventSource;
   onPushWake?: (payload: CallUiEventMap['callUiPushWake']) => unknown;
+  /** Where a freshly issued VoIP token goes, so the server can be told at once. */
+  onPushToken?: (token: string) => unknown;
   schedule?: (callback: () => void, ms: number) => () => void;
 }): CallUiBinding {
-  const { events, bridge, native, ui, onPushWake } = options;
+  const { events, bridge, native, ui, onPushToken, onPushWake } = options;
   const subscriptions: Array<{ remove: () => void }> = [];
   const reported = new Set<string>();
   const invitations = new Set<string>();
@@ -294,6 +305,20 @@ export function bindCallUi(options: {
       if (!disposed && !invitations.has(payload.callId)) failAnswer(payload.callId, 'wake_failed');
     });
   }));
+  subscriptions.push(ui.addListener('callUiAudioSession', (payload) => {
+    if (disposed || !payload.route) return;
+    // The system call screen moves the audio on its own — a car kit connecting,
+    // the speaker button on the CallKit screen. The engine's speaker flag is
+    // what the in-app button negates, so leaving it stale made the next tap
+    // look like it had done nothing at all.
+    bridge.setSpeaker(payload.route === 'speaker').catch(swallow('follow the system audio route'));
+  }));
+
+  subscriptions.push(ui.addListener('callUiPushToken', (payload) => {
+    if (disposed || !payload.token) return;
+    Promise.resolve().then(() => onPushToken?.(payload.token)).catch(swallow('publish a refreshed VoIP token'));
+  }));
+
   // Flush native launch events only after every JS listener is installed.
   native.startCallUiEvents?.().catch(swallow('start native event delivery'));
 

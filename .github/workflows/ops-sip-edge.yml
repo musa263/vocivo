@@ -187,6 +187,16 @@ jobs:
           echo "git checkout: ${GIT_DIR_TOP:-none (files were copied here, not cloned)}"
           # Print key=value files without leaking values.
           redact() { sed -E "s/^([A-Za-z_][A-Za-z0-9_]*)=.*/\1=<set>/"; }
+          # Nothing shaped like a credential may leave this box. FreeSWITCH
+          # writes every application it runs into freeswitch.log with its
+          # arguments already expanded, so while the inbound dialplan carried an
+          # Authorization header of its own the edge secret was in that file on
+          # every call — and the log actions below ship it into a workflow log
+          # that everyone with read access to the repository can open. The
+          # dialplan asks the local proxy now, but the calls that came before
+          # that change are still on disk, and a hand-edited dialplan could
+          # bring the header back.
+          no_secrets() { sed -E "s#(Bearer|Basic) [A-Za-z0-9._~+/=-]{6,}#\1 <redacted>#g; s#vocivo:[A-Za-z0-9._~+/=-]{6,}#vocivo:<redacted>#g"; }
           '
 
           case "$ACTION" in
@@ -276,8 +286,15 @@ jobs:
               docker compose exec -T freeswitch sh -c "ls /var/log/freeswitch/json_cdr 2>/dev/null | wc -l" 2>/dev/null || echo "?"
               echo "--- calls now ---"; docker compose exec -T freeswitch fs_cli -x "show calls count" 2>/dev/null || true
               echo "--- freeswitch log levels (core / console) ---"
-              # Never "fsctl loglevel" with no argument: it passes -1 and DISABLES the core log.
-              docker compose exec -T freeswitch fs_cli -x "fsctl loglevel debug" 2>/dev/null || true
+              # Read, never write. This action is documented as read-only and is
+              # run against a droplet carrying live calls, but it used to say
+              # "fsctl loglevel debug", which is not a question — it left the
+              # core log at debug on a media host for as long as nobody noticed.
+              # There is no safe way to ask the switch what the core level is
+              # ("fsctl loglevel" with no argument passes -1 and DISABLES the
+              # core log), so what is reported is the level the configuration
+              # asks for, which is what a restart would go back to anyway.
+              docker compose exec -T freeswitch sh -c "grep -hE \"loglevel\" /etc/freeswitch/autoload_configs/switch.conf.xml /etc/freeswitch/autoload_configs/console.conf.xml 2>/dev/null" 2>/dev/null || true
               docker compose exec -T freeswitch fs_cli -x "console loglevel" 2>/dev/null || true
               docker compose exec -T freeswitch fs_cli -x "module_exists mod_console" 2>/dev/null || true
               docker compose exec -T freeswitch fs_cli -x "module_exists mod_logfile" 2>/dev/null || true
@@ -297,7 +314,7 @@ jobs:
               total=$(wc -l < /tmp/vocivo-logs.txt)
               kept=$( { grep -vP "$noise" /tmp/vocivo-logs.txt || true; } | wc -l)
               echo "--- last '"$since"': $total lines, $((total - kept)) of them scanner/keepalive noise (not shown) ---"
-              { grep -vP "$noise" /tmp/vocivo-logs.txt || true; } | sed -E "s/^([^ ]+) +\| ([0-9T:.-]+)Z? (.*)$/\2 \1 \3/" | cut -c1-400
+              { grep -vP "$noise" /tmp/vocivo-logs.txt || true; } | sed -E "s/^([^ ]+) +\| ([0-9T:.-]+)Z? (.*)$/\2 \1 \3/" | no_secrets | cut -c1-400
               rm -f /tmp/vocivo-logs.txt
               # FreeSWITCH keeps its INFO lines (which dialplan ran, what each
               # call executed, what xml_curl answered) in its own log file, not
@@ -305,7 +322,7 @@ jobs:
               echo "--- freeswitch.log (call flow, last 600 lines filtered) ---"
               docker compose exec -T freeswitch sh -c "tail -n 600 /var/log/freeswitch/freeswitch.log 2>/dev/null" 2>/dev/null \
                 | { grep -E "EXECUTE|Dialplan|xml_curl|XML_CURL|socket|http_cache|json_cdr|Hangup|hangup|NORMAL_|ERR\]|CRIT\]|New Channel|Transfer|transfer|playback|play_and_get" || echo "(no call-flow lines in the last 600 lines)"; } \
-                | grep -vE "sofia_glue|switch_rtp|send_dtmf|switch_core_media" | cut -c1-260 | tail -120
+                | grep -vE "sofia_glue|switch_rtp|send_dtmf|switch_core_media" | no_secrets | cut -c1-260 | tail -120
               ';;
             call-trace)
               # Why did the last calls end? Compact on purpose: GitHub keeps ten
@@ -320,9 +337,9 @@ jobs:
               echo "--- freeswitch.log: signalling and hangups ---"
               docker compose exec -T freeswitch sh -c "tail -n 4000 /var/log/freeswitch/freeswitch.log 2>/dev/null" 2>/dev/null \
                 | { grep -E "Hangup|hangup_cause|HANGUP|BYE|ACK|Timer|timeout|TIMEOUT|MEDIA_TIMEOUT|RECOVERY|received 4|received 5|Cannot locate|Fail|fail|ERR\]|CRIT\]|New Channel|socket|Transfer|EXECUTE.*(answer|socket|record|playback|transfer|hangup|bridge)" || echo "(nothing)"; } \
-                | grep -vE "sofia_glue|switch_rtp|switch_core_media|send_dtmf|SCHED_FIFO|nice level|rtp-timeout-sec|rtp-hold-timeout-sec|sofia_presence|Cannot locate domain" | cut -c1-240 | tail -90 || echo "(no matching FreeSWITCH lines or source unavailable)"
+                | grep -vE "sofia_glue|switch_rtp|switch_core_media|send_dtmf|SCHED_FIFO|nice level|rtp-timeout-sec|rtp-hold-timeout-sec|sofia_presence|Cannot locate domain" | no_secrets | cut -c1-240 | tail -90 || echo "(no matching FreeSWITCH lines or source unavailable)"
               echo "--- freeswitch.log: hold music, ringback, files it could not open ---"
-              docker compose exec -T freeswitch sh -c "grep -E \"ringback|Ringback|hold_music|hold-music|speech-bed|displace|Cannot open|Failed to open|File not found|No such file\" /var/log/freeswitch/freeswitch.log 2>/dev/null | tail -40" 2>/dev/null | cut -c1-240 || echo "(nothing)"
+              docker compose exec -T freeswitch sh -c "grep -E \"ringback|Ringback|hold_music|hold-music|speech-bed|displace|Cannot open|Failed to open|File not found|No such file\" /var/log/freeswitch/freeswitch.log 2>/dev/null | tail -40" 2>/dev/null | no_secrets | cut -c1-240 || echo "(nothing)"
               ls -la /opt/vocivo/sip/freeswitch/sounds/ 2>/dev/null || echo "(no sounds directory shipped)"
               docker compose exec -T freeswitch sh -c "ls -la /opt/vocivo-fs/sounds/ 2>&1" 2>/dev/null || true
               echo "--- kamailio: call signalling ---"
@@ -354,8 +371,13 @@ jobs:
               # the deployment root is exactly what the SIP_DIR discovery
               # above looks for, and it found the staging copy instead of the
               # live one.
+              # The backup is an if/fi rather than "[ -d ... ] && cp": under
+              # set -e the test failing is the last command of the script,
+              # which ended the shell before the tar below ever ran — so on a
+              # droplet with nothing at /opt/vocivo/sip yet, the very first
+              # sync silently staged nothing at all.
               tar czf - -C services sip | ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 "$SSH_USER@$HOST" \
-                'set -e; install -d -m 755 /opt/vocivo/sip-backups; ts=$(date +%Y%m%d%H%M%S); [ -d /opt/vocivo/sip ] && cp -a /opt/vocivo/sip "/opt/vocivo/sip-backups/$ts"; rm -rf /opt/vocivo-stage; install -d /opt/vocivo-stage; tar xzf - -C /opt/vocivo-stage; echo "backed up to /opt/vocivo/sip-backups/$ts"'
+                'set -e; install -d -m 755 /opt/vocivo/sip-backups; ts=$(date +%Y%m%d%H%M%S); if [ -d /opt/vocivo/sip ]; then cp -a /opt/vocivo/sip "/opt/vocivo/sip-backups/$ts"; echo "backed up to /opt/vocivo/sip-backups/$ts"; else echo "no /opt/vocivo/sip to back up; this is a first deployment"; fi; rm -rf /opt/vocivo-stage; install -d /opt/vocivo-stage; tar xzf - -C /opt/vocivo-stage'
               remote="$remote"'
               set -e
               # The live directory is named, not discovered. Discovery answers
@@ -456,7 +478,11 @@ jobs:
                   fi
                 done < "$sounds/sources.txt"
               fi
-              latest=$(ls -1d /opt/vocivo/sip-backups/* 2>/dev/null | tail -1)
+              # || true, like its twin in rollback-config: on a first deployment
+              # the backup directory is empty, ls exits 1, and under set -e that
+              # ended the sync one line before the swap — with the new tree
+              # staged, the old one still live and nothing said why.
+              latest=$( { ls -1d /opt/vocivo/sip-backups/* 2>/dev/null || true; } | tail -1)
               rm -rf "$TARGET" && mv "$STAGE" "$TARGET" && rmdir /opt/vocivo-stage
               cd "$TARGET"
               if ! why=$(docker compose config 2>&1 >/dev/null); then
@@ -465,7 +491,11 @@ jobs:
                 # sent me looking in the wrong place.
                 echo "::error::the shipped compose file is not valid; rolling back"
                 echo "$why" | tail -5
-                rm -rf "$TARGET" && cp -a "$latest" "$TARGET"
+                if [ -n "$latest" ]; then
+                  rm -rf "$TARGET" && cp -a "$latest" "$TARGET"
+                else
+                  echo "::warning::there is no earlier configuration to restore; the shipped one is in place and invalid"
+                fi
                 exit 1
               fi
               docker compose up -d --remove-orphans
@@ -480,30 +510,44 @@ jobs:
               sleep 5
               docker compose ps
               kamailio_ps=$(docker compose ps kamailio)
-              grep -q "Up" <<< "$kamailio_ps" || { echo "::error::kamailio did not come back — run rollback-config"; exit 1; }
-              docker compose logs --tail=400 --no-color kamailio | { grep -E "trunk sources|ERROR|CRITICAL" | grep -v "tcpconn_do_send|msg_send_buffer|handle_ser_child|tcp_read_req" || echo "no Kamailio errors in the last 400 lines"; }
+              # Both spellings: compose v1 says "Up", and several compose v2
+              # releases say "running" instead — against those, every sync ended
+              # by reporting an edge that was in fact back up and registering.
+              grep -qE "Up|running" <<< "$kamailio_ps" || { echo "::error::kamailio did not come back — run rollback-config"; exit 1; }
+              # -E on the second grep too: the alternation is a basic-expression
+              # literal without it, so the filter matched nothing and TCP
+              # keepalive churn pushed the real errors out of the annotation.
+              docker compose logs --tail=400 --no-color kamailio | { grep -E "trunk sources|ERROR|CRITICAL" | grep -vE "tcpconn_do_send|msg_send_buffer|handle_ser_child|tcp_read_req" || echo "no Kamailio errors in the last 400 lines"; }
               docker compose logs --tail=30 --no-color freeswitch | { grep -Ei "error|crit|cannot|failed" || echo "no FreeSWITCH errors in the last 30 lines"; }
               # Kamailio posts its call records through the local nginx proxy
               # (127.0.0.1:8081), which was installed by hand and adds the edge
-              # secret. Give it the /sip-cdr location if it lacks one; the
-              # proxy snippet it already uses for /sip-auth carries the secret.
+              # secret; the static inbound dialplan asks it for a routing
+              # decision the same way, so that no credential is ever an argument
+              # to a FreeSWITCH application — the switch prints those, expanded,
+              # into a log this workflow reads. Give the proxy whichever of
+              # those locations it lacks; the snippet it already uses for
+              # /sip-auth carries the secret.
               edge=$( { grep -RlE "listen[[:space:]]+127\.0\.0\.1:8081" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null || true; } | head -1 || true )
               if [ -z "$edge" ]; then
-                echo "::warning::no nginx server on 127.0.0.1:8081 found; Kamailio call records will not reach the API"
-              elif grep -q "location = /sip-cdr" "$edge"; then
-                echo "nginx edge proxy already routes /sip-cdr ($edge)"
+                echo "::warning::no nginx server on 127.0.0.1:8081 found; Kamailio call records and the static inbound lookup will not reach the API"
               else
                 snippet=$( { grep -m1 -oE "include [^;]+;" "$edge" || true; } )
-                install -d /etc/vocivo/nginx-backups
-                backup="/etc/vocivo/nginx-backups/$(basename "$edge").$(date +%Y%m%d%H%M%S)"
-                cp "$edge" "$backup"
-                # Insert before the last closing brace, which ends the server block.
-                awk -v snip="$snippet" "BEGIN { n = 0 } { lines[++n] = \$0 } END { last = n; while (last > 0 && lines[last] !~ /^[[:space:]]*}[[:space:]]*\$/) last--; for (i = 1; i < last; i++) print lines[i]; print \"\"; print \"    location = /sip-cdr {\"; print \"        proxy_pass https://vocivo.app/api/voice/sip-cdr;\"; if (snip != \"\") print \"        \" snip; print \"    }\"; for (i = last; i <= n; i++) print lines[i] }" "$backup" > "$edge"
-                if nginx -t >/dev/null 2>&1; then
-                  systemctl reload nginx && echo "nginx edge proxy now routes /sip-cdr ($edge)"
-                else
-                  cp "$backup" "$edge"; echo "::warning::nginx rejected the /sip-cdr location; edge proxy restored from $backup"
-                fi
+                for api_route in sip-cdr sip-inbound; do
+                  if grep -q "location = /$api_route" "$edge"; then
+                    echo "nginx edge proxy already routes /$api_route ($edge)"
+                    continue
+                  fi
+                  install -d /etc/vocivo/nginx-backups
+                  backup="/etc/vocivo/nginx-backups/$(basename "$edge").$(date +%Y%m%d%H%M%S).$api_route"
+                  cp "$edge" "$backup"
+                  # Insert before the last closing brace, which ends the server block.
+                  awk -v snip="$snippet" -v api_route="$api_route" "BEGIN { n = 0 } { lines[++n] = \$0 } END { last = n; while (last > 0 && lines[last] !~ /^[[:space:]]*}[[:space:]]*\$/) last--; for (i = 1; i < last; i++) print lines[i]; print \"\"; print \"    location = /\" api_route \" {\"; print \"        proxy_pass https://vocivo.app/api/voice/\" api_route \";\"; if (snip != \"\") print \"        \" snip; print \"    }\"; for (i = last; i <= n; i++) print lines[i] }" "$backup" > "$edge"
+                  if nginx -t >/dev/null 2>&1; then
+                    systemctl reload nginx && echo "nginx edge proxy now routes /$api_route ($edge)"
+                  else
+                    cp "$backup" "$edge"; echo "::warning::nginx rejected the /$api_route location; edge proxy restored from $backup"
+                  fi
+                done
               fi
               # The WebSocket the apps register over is terminated by nginx and
               # proxied to Kamailio on 127.0.0.1:8080. nginx closes a proxied
@@ -554,10 +598,12 @@ jobs:
               # switch behind it is.
               docker compose up -d --force-recreate kamailio && sleep 5
               # A scanner hammering 5060 can push the start-up lines out of a short tail within seconds.
-              docker compose logs --tail=400 --no-color kamailio | { grep -E "trunk sources|ERROR|CRITICAL" | grep -v "tcpconn_do_send|msg_send_buffer|handle_ser_child|tcp_read_req" || echo "kamailio: no errors in the last 400 lines"; }
+              docker compose logs --tail=400 --no-color kamailio | { grep -E "trunk sources|ERROR|CRITICAL" | grep -vE "tcpconn_do_send|msg_send_buffer|handle_ser_child|tcp_read_req" || echo "kamailio: no errors in the last 400 lines"; }
               kamailio_ps=$(docker compose ps kamailio)
               echo "$kamailio_ps"
-              grep -q "Up" <<< "$kamailio_ps" || { echo "::error::kamailio did not come back"; exit 1; }
+              # "Up" is compose v1, "running" is compose v2; matching only the
+              # first called a healthy edge dead.
+              grep -qE "Up|running" <<< "$kamailio_ps" || { echo "::error::kamailio did not come back"; exit 1; }
               docker compose up -d --force-recreate freeswitch && sleep 8 && docker compose ps freeswitch
               docker compose logs --tail=40 --no-color freeswitch | { grep -E "Vocivo:|xml_curl|mod_http_cache|mod_shout|ERR|CRIT" || true; }
               ';;

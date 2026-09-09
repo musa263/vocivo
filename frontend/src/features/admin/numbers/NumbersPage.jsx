@@ -28,6 +28,11 @@ export function NumbersPage({ config, onRefresh, onOpenTrunks, api }) {
   }
   return <div className="page number-routing-page">
     <PageHeader eyebrow="ROUTING" title="Phone numbers" subtitle="Direct lines, shared numbers and inbound destinations.">
+      {/* A link, not a second trunk editor. Embedding the editor here gave the
+          same trunk two revision counters, so a save from one page rejected the
+          other's, and it asked a trunks endpoint for its data on behalf of every
+          customer entitled to numbers but not to trunks — who got nothing but a
+          permanent error banner. */}
       {onOpenTrunks && <button className="secondary" onClick={onOpenTrunks}><Network /> SIP trunks</button>}
       <button className="secondary" disabled={busy || removeBusy} onClick={() => { setDraft(null); setFailure(''); setNotice(''); void load(); }}><RefreshCw /> Refresh</button>
     </PageHeader>

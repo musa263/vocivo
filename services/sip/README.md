@@ -206,6 +206,16 @@ route decisions return 503. A previous worker request's route can never authoriz
 a later request whose HTTP lookup failed. The loopback gate covers timeout after
 success, denial, malformed responses, server failure, and recovery.
 
+The same hazard reaches the call records, and is handled the same way. A script
+variable belongs to a worker process rather than to a message and keeps its
+value until that process next writes it, so a reply or a failure — handled by
+whichever process received it, not the one that routed the INVITE — must not
+read the route token or the dialled user out of one. Both are passed to
+`CDR_ENQUEUE` in variables the enqueuing route sets, and the reply and failure
+routes set them empty: a record for an answered or failed call carries the
+call id, the parties and the event, and the API joins it to the INVITE's own
+row rather than to whatever that worker last saw.
+
 ## Inbound audio diagnostics
 
 The `Inbound audio diagnostics` workflow accepts a FreeSWITCH channel UUID.

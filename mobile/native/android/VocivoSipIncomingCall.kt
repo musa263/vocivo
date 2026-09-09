@@ -28,8 +28,19 @@ import android.util.Log
 object VocivoSipIncomingCall {
   private const val ACCOUNT_ID = "app.vocivo.sip.account"
 
-  fun startRuntime(context: Context, callId: String) {
-    val service = Intent(context, VocivoSipCallService::class.java).putExtra("callId", callId)
+  /**
+   * Puts the call under a phone-call foreground service.
+   *
+   * `wake` is what separates the two callers: an incoming call arrives at a
+   * process that may have no JavaScript runtime yet and needs one started, a
+   * dialled call already has one and only needs the foreground service, which
+   * is what stops an aggressive OEM from killing the app mid-conversation once
+   * the user leaves Vocivo for another app.
+   */
+  fun startRuntime(context: Context, callId: String, wake: Boolean = true) {
+    val service = Intent(context, VocivoSipCallService::class.java)
+      .putExtra("callId", callId)
+      .putExtra("wakeRuntime", wake)
     if (android.os.Build.VERSION.SDK_INT >= 26) context.startForegroundService(service) else context.startService(service)
   }
 

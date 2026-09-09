@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { VoicePnBridge, setNativeVoiceSignedIn } from './nativeVoiceBridge';
 import { existingManagedVoiceClient, getManagedVoiceClient } from './managedVoiceRuntime';
+import { api } from '../../../shared/api';
 import { Platform } from 'react-native';
 
 export { VoicePnBridge };
@@ -16,6 +17,43 @@ export const voipClient = new Proxy({} as ReturnType<typeof getManagedVoiceClien
 });
 
 const secureVoiceSessionKey = 'vocivo.secure.voice-session.v1';
+const secureVoiceDeviceKey = 'vocivo.secure.voice-device.v1';
+
+/** What `/api/voice/devices` answers a registration with. */
+export type VoiceDeviceRegistration = { device?: { id?: string } };
+
+/**
+ * The id the server gave this installation's push registration.
+ *
+ * Sending it back on every registration is what keeps one handset to one row.
+ * Without it the server minted a new id each time and sign-out had nothing to
+ * delete: the previous account's phone went on being pushed, and iOS reported
+ * then ended the call, writing a missed call into the Recents of an account
+ * that had signed out.
+ */
+export async function voicePushDeviceId() {
+  try {
+    return await SecureStore.getItemAsync(secureVoiceDeviceKey);
+  } catch (failure) {
+    console.warn('[Vocivo Voice] stored push device id is unreadable', failure);
+    return null;
+  }
+}
+
+export async function rememberVoicePushDeviceId(deviceId?: string) {
+  if (!deviceId) return;
+  await SecureStore.setItemAsync(secureVoiceDeviceKey, deviceId, {
+    keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+  });
+}
+
+/** Stops this device being pushed for the account that is signing out. */
+export async function deleteVoiceDevice() {
+  const deviceId = await voicePushDeviceId();
+  if (!deviceId) return;
+  await api.delete(`/api/voice/devices?deviceId=${encodeURIComponent(deviceId)}`);
+  await SecureStore.deleteItemAsync(secureVoiceDeviceKey);
+}
 
 export async function getVoicePushToken() {
   if (Platform.OS === 'ios') return (await VoicePnBridge.getVoipToken())?.trim() || undefined;
@@ -75,6 +113,10 @@ export async function signOutVoiceDevice() {
   // Every cleanup step must run even when an earlier one fails, otherwise a
   // single native or storage error would leave credentials and registrations behind.
   const steps: Array<[string, () => Promise<unknown>]> = [
+    // First, while the session token still authenticates it: everything below
+    // only affects this handset, but a push registration left on the server
+    // keeps ringing a phone whose owner has signed out.
+    ['delete this device push registration', () => deleteVoiceDevice()],
     ['disable native voice sign-in flag', () => setVoiceSignedIn(false)],
     ['unregister push notifications', async () => {
       const client = existingManagedVoiceClient();

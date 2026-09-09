@@ -21,10 +21,13 @@ jest.mock('../../src/features/calling/media/ringtone', () => ({
 jest.mock('../../src/features/calling/runtime/voipClient', () => ({
   getVoicePushToken: jest.fn(async () => 'device-token'),
   persistVoiceSession: jest.fn(async () => undefined),
+  voicePushDeviceId: jest.fn(async () => null),
+  rememberVoicePushDeviceId: jest.fn(async () => undefined),
   voipClient: { loginWithToken: jest.fn() },
 }));
 jest.mock('../../src/features/calling/runtime/sipNative', () => ({
   onSipRegistration: jest.fn(() => ({ remove: jest.fn() })),
+  onVocivoPushToken: jest.fn(() => ({ remove: jest.fn() })),
   refreshVocivoSip: jest.fn(async () => undefined),
   ensureSipRegistration: jest.fn(async () => 3600),
 }));

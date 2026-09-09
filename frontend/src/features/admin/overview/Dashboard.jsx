@@ -1,9 +1,10 @@
 import { BellRing, CircleDot, FileClock, Network, PhoneIncoming, Users } from "lucide-react";
 import { Status, PageHeader, Empty } from '../components/ui.jsx';
+import { findActiveWorkspace } from '../activeWorkspace.js';
 
 export function Dashboard({ overview, extensions, config, events, setSection, customer, voices }) {
   const metrics = overview?.metrics || {};
-  const organization = config.organizations.find((item) => item.id === config.activeOrganizationId) || config.organizations[0];
+  const { organization } = findActiveWorkspace(config.organizations, config.activeOrganizationId);
   const missingPushPlatforms = [
     !overview?.connection?.iosPushConfigured && 'iOS PushKit',
     !overview?.connection?.androidPushConfigured && 'Android FCM',
@@ -16,7 +17,11 @@ export function Dashboard({ overview, extensions, config, events, setSection, cu
     ...platformReadiness,
     // On Vocivo's own edge the receptionist needs the voice engine, not a carrier assistant id.
     ['AI receptionist', config.ai.enabled && (voices?.engine === 'vocivo' ? Boolean(voices?.provider?.healthy) : Boolean(config.ai.assistantId)), !config.ai.enabled ? 'Disabled' : voices?.engine === 'vocivo' ? (voices?.provider?.healthy ? 'Active on the Vocivo edge' : 'Voice engine unavailable') : (config.ai.assistantId ? 'Active' : 'Needs synchronization')],
-    [`Extension range ${organization?.extensionStart || ''}-${organization?.extensionEnd || ''}`, organization?.internalCallingEnabled, `${extensions.length} of ${organization ? organization.extensionEnd - organization.extensionStart + 1 : 0} slots assigned`],
+    organization
+      ? [`Extension range ${organization.extensionStart}-${organization.extensionEnd}`, organization.internalCallingEnabled, `${extensions.length} of ${organization.extensionEnd - organization.extensionStart + 1} slots assigned`]
+      // Reading the range off whichever organization happens to be first would
+      // report another customer's allocation as this one's.
+      : ['Extension range', false, 'The open workspace is no longer in the customer list'],
   ];
   return <div className="page"><PageHeader eyebrow="SYSTEM OVERVIEW" title="Dashboard" subtitle="Live voice infrastructure, users and routing at a glance."><button className="secondary" onClick={() => setSection('events')}><FileClock /> Event log</button></PageHeader>
     <div className="metrics"><div><Users /><span>Active users</span><strong>{metrics.activeExtensions ?? extensions.length}</strong><small>{extensions.length} extensions</small></div><div><PhoneIncoming /><span>Company numbers</span><strong>{metrics.phoneNumbers ?? 0}</strong><small>Inbound lines</small></div><div><Network /><span>Concurrent calls</span><strong>{customer?.plan?.limits?.concurrentCalls || 0}</strong><small>Plan capacity</small></div><div><BellRing /><span>Vocivo plan</span><strong>{customer?.plan?.name || 'Managed'}</strong><small>{customer?.subscription?.status || 'Service active'}</small></div></div>

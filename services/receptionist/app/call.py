@@ -469,6 +469,21 @@ class CallHandler:
             try:
                 if not connection.hungup.is_set():
                     await asyncio.wait_for(connection.api(f"uuid_record {connection.uuid} stop {path}"), 5)
+                    # Put the buffering back the way it was found. It was turned
+                    # off above only so this capture would see short frames, but
+                    # it is a channel variable: left off it also applied to
+                    # every turn recording _listen made for the rest of the call.
+                    # An empty value unsets it, which is what the recorder wants
+                    # when nobody has asked for anything in particular.
+                    await asyncio.wait_for(connection.set("enable_file_write_buffering", ""), 5)
+            except Exception:  # noqa: BLE001 - tidying up must not replace what went wrong
+                # This runs while an exception may already be on its way out,
+                # and on a socket that failure has often poisoned. Raising here
+                # substituted an EslProtocolError for it — turning a
+                # SpeechSynthesisError, which has a transfer-to-a-person
+                # recovery, into one that only logs and releases the call, so a
+                # caller who should have been put through was dropped instead.
+                log.warning("call %s could not stop the interruption capture", connection.uuid[:8])
             finally:
                 self._discard(path)
 

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bot, ListFilter, PhoneIncoming, Play, Plus, Save, ShieldCheck, Trash2, Upload } from "lucide-react";
 import { apiAudio } from "../../../shared/api";
 import { Status, Toggle, PageHeader, Field } from '../components/ui.jsx';
@@ -8,6 +8,18 @@ export function VoicePage({ business, setBusiness, config, setConfig, voices, on
   const [playingVoice, setPlayingVoice] = useState('');
   const [previewError, setPreviewError] = useState('');
   const audioRef = useRef(null);
+  // The preview belongs to the page that started it. Leaving the section or
+  // switching to another customer used to leave the previous workspace's
+  // greeting playing with nothing on screen to stop it, and its blob held for
+  // the life of the tab.
+  useEffect(() => () => {
+    const audio = audioRef.current;
+    audioRef.current = null;
+    if (!audio) return;
+    audio.pause();
+    if (audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
+    audio.removeAttribute('src');
+  }, []);
   const recommendedVoices = (voices?.voices || []).filter((voice) => voice.recommended !== false);
   const otherVoices = (voices?.voices || []).filter((voice) => voice.recommended === false);
   const voiceLabel = (voice) => `${voice.name} · ${voice.gender} · ${voice.accent}${voice.quality ? ` · ${voice.quality}` : ''}`;

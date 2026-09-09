@@ -1,6 +1,14 @@
 services:
   rtpengine:
-    image: drachtio/rtpengine:latest
+    # Pinned by digest like FreeSWITCH is. This container terminates DTLS-SRTP
+    # for every browser leg, and `deploy` runs `docker compose pull`: on a
+    # floating tag an upstream push would have swapped it under a live edge
+    # between one ops action and the next, with nothing in the repository to
+    # say what had changed. The tag is the one this edge has always run (the
+    # image behind it was last pushed in March 2021); the digest is what makes
+    # it immutable. To move it deliberately, read the new one with
+    # `docker manifest inspect drachtio/rtpengine:latest` and change both here.
+    image: drachtio/rtpengine:latest@sha256:d5bf3715baa197d89f89a70207d06d5509a4284b7392310a94a466ace07afb96
     restart: unless-stopped
     network_mode: host
     environment:
@@ -14,8 +22,12 @@ services:
       - --port-min=${RTP_START:-30000}
       - --port-max=${RTP_END:-39999}
       # A session that never carried media (a call nobody answered, an INVITE
-      # that failed) is released after two minutes instead of an hour.
-      - --timeout=60
+      # that failed) is released after two minutes instead of an hour. It has
+      # to outlast a wake-up ring, which is 45 seconds of no media at all
+      # before the callee's phone even answers, plus the resume that follows:
+      # at 60 seconds a caller who let it ring out was a few seconds away from
+      # having the ports deleted underneath the call that was about to connect.
+      - --timeout=120
       - --silent-timeout=120
       - --foreground
       - --log-level=5

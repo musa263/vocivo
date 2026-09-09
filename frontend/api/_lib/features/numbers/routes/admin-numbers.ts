@@ -22,10 +22,10 @@ function successfulOrderNumbers(order: Record<string, any> | undefined) {
     .map((item: { phone_number: string }) => item.phone_number);
 }
 
-async function assignFulfilledNumbers(organizationId: string, phoneNumbers: string[], options: { failOnError?: boolean } = {}) {
+async function assignFulfilledNumbers(organizationId: string, phoneNumbers: string[], options: { failOnError?: boolean; limit?: number } = {}) {
   await Promise.all([...new Set(phoneNumbers)].map(async (phoneNumber) => {
     try {
-      await assignNumberToOrganization(phoneNumber, organizationId, { source: 'owned', destinationType: 'main' });
+      await assignNumberToOrganization(phoneNumber, organizationId, { source: 'owned', destinationType: 'main' }, { limit: options.limit });
       await changePendingNumberPurchases(organizationId, [], [phoneNumber]);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -155,7 +155,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         throw error;
       });
       const payload = await response.json() as { data?: Record<string, any> };
-      await assignFulfilledNumbers(activeOrganizationId, successfulOrderNumbers(payload.data), { failOnError: true });
+      await assignFulfilledNumbers(activeOrganizationId, successfulOrderNumbers(payload.data), {
+        failOnError: true,
+        ...(subscriptionAccess.superadmin === false ? { limit: subscriptionAccess.plan.limits.phoneNumbers } : {}),
+      });
       await changePendingNumberPurchases(activeOrganizationId, [], successfulOrderNumbers(payload.data));
       invalidatePhoneNumberCache('owned');
       return res.status(201).json({ order: payload.data });

@@ -79,9 +79,24 @@ export function applyCarrierNumbers(config: PbxConfig, organizationId: string, t
   };
 }
 
-export function detachCompanyNumber(config: PbxConfig, organizationId: string, phoneNumber: string, extensionIds: string[] = []) {
+export function detachCompanyNumber(
+  config: PbxConfig,
+  organizationId: string,
+  phoneNumber: string,
+  extensionIds: string[] = [],
+  options: { carrierOnly?: boolean } = {},
+) {
   const current = config.numberAssignments[phoneNumber];
   if (!current || current.organizationId !== organizationId) throw new CarrierTrunkError(404, 'Phone number not found in this company.');
+  // Which screen is asking, stated rather than guessed from the number itself.
+  // The carrier trunk screen removes DIDs a company brought with its own
+  // carrier; it used to check ownership and nothing else, so a company on
+  // managed calling could send that request for their main Vocivo number and
+  // take their own main line off the air. The phone numbers screen may retire
+  // either kind, which is why the restriction belongs to the caller.
+  if (options.carrierOnly && current.source !== 'carrier') {
+    throw new CarrierTrunkError(409, 'This number was provided by Vocivo. Remove it from the phone numbers screen instead.');
+  }
   // Retain a tombstone so historical order reconciliation cannot reattach it.
   const numberAssignments = { ...config.numberAssignments, [phoneNumber]: { ...current, disabled: true } };
   const tenant = pbxForOrganization(config, organizationId);
@@ -119,5 +134,5 @@ export async function useCarrierNumbers(organizationId: string, id: string, revi
 export async function removeCompanyNumber(organizationId: string, phoneNumber: string) {
   if (!/^\+[1-9]\d{6,14}$/.test(phoneNumber)) throw new CarrierTrunkError(400, 'A complete international phone number is required.');
   const extensionIds = (await listExtensions(organizationId)).map(item => item.id);
-  await savePbxConfig(current => detachCompanyNumber(current, organizationId, phoneNumber, extensionIds));
+  await savePbxConfig(current => detachCompanyNumber(current, organizationId, phoneNumber, extensionIds, { carrierOnly: true }));
 }

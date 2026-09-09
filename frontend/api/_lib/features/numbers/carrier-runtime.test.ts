@@ -40,6 +40,40 @@ test('national inbound aliases are scoped to carrier source and never select an 
   assert.equal(resolveInboundNumber(config, did, trunk.server, [deployment]), '');
 });
 
+test('a tenant carrier cannot deliver a number that carrier does not serve', () => {
+  const { trunk, config, deployment } = carrierFixture();
+  // A number Vocivo assigned, belonging to a different company than the one
+  // whose trunk this is. The edge admits every trusted source, so "it arrived
+  // on 5060" says nothing about whose carrier sent it.
+  config.organizations.push({ ...config.organizations[0], id: 'other', slug: 'other' });
+  const platformDid = '+12025550123';
+  config.numberAssignments[platformDid] = { organizationId: 'other', source: 'owned', destinationType: 'main' };
+
+  assert.equal(resolveInboundNumber(config, platformDid, '198.51.100.99', [deployment]), platformDid,
+    'the platform carrier still delivers a platform number');
+  assert.equal(resolveInboundNumber(config, platformDid, trunk.server, [deployment]), '',
+    'one company SIP trunk must never ring another company by dialling its Vocivo number');
+
+  const expired = { ...deployment, expiresAt: new Date(Date.now() - 60_000).toISOString() };
+  assert.equal(resolveInboundNumber(config, platformDid, trunk.server, [expired]), platformDid,
+    'an expired temporary deployment no longer reserves that address');
+});
+
+test('naming the platform signalling addresses refuses a platform number from anywhere else', () => {
+  const { config, deployment } = carrierFixture();
+  const platformDid = '+12025550123';
+  config.numberAssignments[platformDid] = { organizationId: 'primary', source: 'owned', destinationType: 'main' };
+  const previous = process.env.VOCIVO_PLATFORM_TRUNK_SOURCES;
+  process.env.VOCIVO_PLATFORM_TRUNK_SOURCES = '203.0.113.7, 203.0.113.8';
+  try {
+    assert.equal(resolveInboundNumber(config, platformDid, '203.0.113.8', [deployment]), platformDid);
+    assert.equal(resolveInboundNumber(config, platformDid, '198.51.100.99', [deployment]), '');
+  } finally {
+    if (previous === undefined) delete process.env.VOCIVO_PLATFORM_TRUNK_SOURCES;
+    else process.env.VOCIVO_PLATFORM_TRUNK_SOURCES = previous;
+  }
+});
+
 test('operator gateway artifacts bind the real public IP and cannot activate a form or smuggle XML', () => {
   const { trunk, deployment } = carrierFixture();
   assert.equal(carrierReadiness(trunk, []).status, 'pending_activation');

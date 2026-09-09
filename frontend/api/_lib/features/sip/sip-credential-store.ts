@@ -103,8 +103,8 @@ export async function readSipCredentials(username: string) {
   }
 }
 
-/** The most recently issued live password, for callers that want just one. */
-export async function readSipCredential(username: string) {
-  const credentials = await readSipCredentials(username);
-  return credentials.length ? credentials[credentials.length - 1] : null;
-}
+// readSipCredential() used to live here: the most recently issued live
+// password, for callers that wanted just one. Nothing called it, and now that
+// one extension legitimately holds several concurrent credentials — one per
+// signed-in device — picking the newest is the wrong answer to every question
+// worth asking. Use readSipCredentials() and match on the device.

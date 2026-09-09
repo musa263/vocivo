@@ -45,20 +45,44 @@ public final class VocivoSipCallManager: NSObject {
   private var pending: [(String, [String: Any])] = []
   private let lock = NSLock()
 
+  /// The ringtone the user picked, as a file in the app bundle.
+  private var ringtoneSound = "vocivo_classic.wav"
+
   private override init() {
+    provider = CXProvider(configuration: VocivoSipCallManager.configuration(ringtone: "vocivo_classic.wav"))
+    super.init()
+    provider.setDelegate(self, queue: nil)
+  }
+
+  private static func configuration(ringtone: String?) -> CXProviderConfiguration {
     let configuration = CXProviderConfiguration(localizedName: "Vocivo")
     configuration.supportsVideo = false
-    configuration.maximumCallsPerCallGroup = 1
-    configuration.maximumCallGroups = 1
+    // Vocivo has call waiting, Add caller, Swap and Merge. Allowing one call
+    // per group meant the second leg never reached CallKit at all: when the
+    // first ended, `didDeactivate` turned WebRTC's audio off and the call that
+    // was still up went silent with nothing on screen to explain it.
+    configuration.maximumCallsPerCallGroup = 2
+    configuration.maximumCallGroups = 2
     configuration.supportedHandleTypes = [.phoneNumber, .generic]
     configuration.includesCallsInRecents = true
-    configuration.ringtoneSound = "vocivo_classic.wav"
+    configuration.ringtoneSound = ringtone
     if let icon = UIImage(named: "vocivo-icon") {
       configuration.iconTemplateImageData = icon.pngData()
     }
-    provider = CXProvider(configuration: configuration)
-    super.init()
-    provider.setDelegate(self, queue: nil)
+    return configuration
+  }
+
+  /// Applies the ringtone chosen in Vocivo's settings.
+  ///
+  /// A CallKit provider's ringtone lives in its configuration and nowhere else,
+  /// so changing it means handing the provider a new one. The settings screen
+  /// used to confirm a choice that never left JavaScript.
+  @objc public func setRingtone(_ sound: String?) {
+    let name = (sound ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    // "system" is the one choice that is not a bundled file: leaving the
+    // configuration's sound unset is what asks iOS for its own ringtone.
+    ringtoneSound = name.isEmpty || name == "system" ? "" : (name.hasSuffix(".wav") ? name : "\(name).wav")
+    provider.configuration = VocivoSipCallManager.configuration(ringtone: ringtoneSound.isEmpty ? nil : ringtoneSound)
   }
 
   // MARK: - Launch
@@ -126,8 +150,10 @@ public final class VocivoSipCallManager: NSObject {
     update.hasVideo = false
     update.supportsHolding = true
     update.supportsDTMF = true
-    update.supportsGrouping = false
-    update.supportsUngrouping = false
+    // Merge and Swap are Vocivo features; refusing grouping here left the
+    // CallKit screen without the buttons for them.
+    update.supportsGrouping = true
+    update.supportsUngrouping = true
     let alreadyReported = uuidsByCallId[callId] != nil
     provider.reportNewIncomingCall(with: uuid(for: callId), update: update) { error in
       DispatchQueue.main.async {
@@ -154,7 +180,6 @@ public final class VocivoSipCallManager: NSObject {
     controller.request(CXTransaction(action: action)) { error in
       if let error = error { NSLog("Vocivo: outgoing CallKit transaction failed: \(error.localizedDescription)") }
     }
-    provider.reportOutgoingCall(with: uuid, startedConnectingAt: nil)
   }
 
   @objc public func reportCallConnected(callId: String) {
@@ -403,6 +428,16 @@ extension VocivoSipCallManager: CXProviderDelegate {
     // dialled call routes to the headset the way an incoming one does.
     configureAudioSession()
     action.fulfill()
+    // Only now does CallKit know the call exists. Reporting it straight after
+    // requesting the transaction — before this ran — was a no-op, so a dialled
+    // call sat at zero seconds on the system call screen and in Recents.
+    let update = CXCallUpdate()
+    update.supportsHolding = true
+    update.supportsDTMF = true
+    update.supportsGrouping = true
+    update.supportsUngrouping = true
+    provider.reportCall(with: action.callUUID, updated: update)
+    provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
   }
 
   public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
@@ -419,7 +454,10 @@ extension VocivoSipCallManager: CXProviderDelegate {
     ringback?.stop()
     ringback = nil
     let rtc = RTCAudioSession.sharedInstance()
-    rtc.isAudioEnabled = false
+    // CallKit deactivates the session as one leg of a two-call group ends, with
+    // the other still talking. Turning WebRTC's audio off on that signal alone
+    // is what left the surviving call silent, so it waits for the last call.
+    if uuidsByCallId.isEmpty && connectedCalls.isEmpty { rtc.isAudioEnabled = false }
     rtc.audioSessionDidDeactivate(audioSession)
     emit("callUiAudioSession", ["active": false])
   }

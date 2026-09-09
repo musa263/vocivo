@@ -36,6 +36,7 @@ export async function api(path, options = {}) {
   // request that timed out on a cold function was surfaced as "signal is
   // aborted without reason" and the phone never registered.
   const phoneSetup = path === '/api/voice/sip-credentials' || path === '/api/voice/config';
+  const authPath = path.startsWith('/api/auth/');
   const retryable = method === 'GET' || phoneSetup || ['/api/auth/login', '/api/auth/enroll'].includes(path);
   const attempts = path.startsWith('/api/voice/status') ? 1 : phoneSetup || ['/api/auth/login', '/api/auth/enroll'].includes(path) ? 3 : retryable ? 2 : 1;
   const timeoutMs = path.startsWith('/api/voice/status') ? 5000 : phoneSetup ? 20000 : 10000;
@@ -57,7 +58,10 @@ export async function api(path, options = {}) {
         body: body ? JSON.stringify(body) : undefined,
       });
       const payload = await response.json().catch(() => ({}));
-      const temporary = [429, 500, 502, 503, 504].includes(response.status);
+      // A cold function or a gateway hiccup is worth another attempt. Being
+      // rate limited on the way in is not: three tries per click spent what the
+      // limiter was still willing to allow and brought the lockout on faster.
+      const temporary = [500, 502, 503, 504].includes(response.status) || (response.status === 429 && !authPath);
       if (!response.ok && retryable && temporary && attempt < attempts - 1) {
         await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
         continue;

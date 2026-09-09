@@ -170,7 +170,10 @@ export class SipStackBridge implements NativeSipBridge {
   async unregister() {
     this.registrationGeneration += 1;
     await this.teardown();
-    this.events.emit('registration', { state: 'none' });
+    // Flagged as ours: an unregister the app asked for used to reach the UI as
+    // a bare disconnection, so signing out ended with "the calling connection
+    // was lost" over a sign-out the person had just tapped.
+    this.events.emit('registration', { state: 'none', requested: true });
   }
 
   /**

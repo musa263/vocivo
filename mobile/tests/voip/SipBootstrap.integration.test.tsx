@@ -19,7 +19,20 @@ const secureValues = new Map<string, string>();
 function cache(value: object) { secureValues.set('vocivo.secure.sip-session.v1', JSON.stringify({ ...device, ...value })); }
 let stack: { updateCredentials: jest.Mock; start: jest.Mock; stop: jest.Mock; refresh: jest.Mock; onRegistrationChange: jest.Mock; onInvitation: jest.Mock };
 
+/**
+ * Registration decisions here are all about time: how much of a cached
+ * credential's life is left, whether its TURN grant has run out, how long the
+ * next refresh should wait. Read from the wall clock they drifted between the
+ * moment a case was written and the moment it ran — the near-expiry case below
+ * is only ten seconds from its deadline, and on a cold run it could be an
+ * already-expired cache by the time it was checked, which is a different branch
+ * and would have hidden a regression in the thirty-second freshness guard.
+ */
+const pinnedNow = Date.parse('2026-08-25T10:00:00.000Z');
+
 beforeEach(() => {
+  jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask', 'setImmediate'] });
+  jest.setSystemTime(pinnedNow);
   jest.clearAllMocks();
   (Platform as { OS: string }).OS = 'ios';
   stack = { updateCredentials: jest.fn(async () => undefined), start: jest.fn(async () => undefined), stop: jest.fn(async () => undefined), refresh: jest.fn(async () => undefined), onRegistrationChange: jest.fn(), onInvitation: jest.fn() };
@@ -32,7 +45,7 @@ beforeEach(() => {
   (createSipJsStack as jest.Mock).mockResolvedValue(stack);
 });
 
-afterEach(async () => { await unregisterVocivoSip(); disposeSipVoiceClient(); });
+afterEach(async () => { await unregisterVocivoSip(); disposeSipVoiceClient(); jest.useRealTimers(); });
 
 test('a killed-state bootstrap can register directly from a fresh secure cache with TURN intact', async () => {
   cache({ sessionToken: 'signed-session-a', config, expiresAt: Date.now() + 3600_000 });
@@ -43,8 +56,12 @@ test('a killed-state bootstrap can register directly from a fresh secure cache w
   expect(SecureStore.setItemAsync).toHaveBeenCalledWith(expect.any(String), expect.any(String), { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY });
 });
 
-test.each([Date.now() - 1, Date.now() + 10_000, null])('expired or invalid cache %s is refreshed before connecting', async (expiresAt) => {
-  cache({ sessionToken: 'signed-session-a', config, expiresAt });
+test.each([
+  ['expired a millisecond ago', -1],
+  ['ten seconds from expiry, inside the thirty-second guard', 10_000],
+  ['without an expiry at all', null],
+])('a cache %s is refreshed before connecting', async (_case, offsetMs) => {
+  cache({ sessionToken: 'signed-session-a', config, expiresAt: offsetMs === null ? null : Date.now() + offsetMs });
   await ensureSipRegistration();
   expect(api.post).toHaveBeenCalledWith('/api/voice/sip-credentials', { client: 'ios' });
   expect(stack.start).toHaveBeenCalledTimes(1);
@@ -130,8 +147,9 @@ test('cached TURN expiry bounds the next scheduled configuration refresh', async
   cache({ sessionToken: 'signed-session-a', config: { ...config, iceServers }, expiresAt: Date.now() + 7 * 86400_000 });
   const lifetime = await ensureSipRegistration();
   expect(api.post).not.toHaveBeenCalled();
-  expect(lifetime).toBeLessThanOrEqual(120);
-  expect(lifetime).toBeGreaterThan(100);
+  // Exactly the TURN grant, not the seven-day password: on a pinned clock this
+  // is one number rather than a window wide enough to swallow a regression.
+  expect(lifetime).toBe(120);
 });
 
 

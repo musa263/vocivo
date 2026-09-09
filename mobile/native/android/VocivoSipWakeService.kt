@@ -27,7 +27,12 @@ class VocivoSipCallService : Service() {
     val notification = VocivoSipCallNotification.build(this, id, "Vocivo", false)
     if (Build.VERSION.SDK_INT >= 29) startForeground(VocivoSipCallNotification.SERVICE_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
     else startForeground(VocivoSipCallNotification.SERVICE_ID, notification)
-    startService(Intent(this, VocivoSipWakeService::class.java).putExtras(intent.extras!!))
+    // A dialled call was placed by JavaScript that is already running; asking
+    // for the bootstrap task again would register the phone a second time for
+    // no reason. It is only an incoming call that arrives before the runtime.
+    if (intent.getBooleanExtra("wakeRuntime", true)) {
+      startService(Intent(this, VocivoSipWakeService::class.java).putExtras(intent.extras!!))
+    }
     return START_NOT_STICKY
   }
 }

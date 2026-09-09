@@ -5,8 +5,8 @@ import { createManagedTokenConfig as createTokenConfig, isManagedPushLaunch } fr
 import { api } from '../../../shared/api';
 import { pushEnvironment } from '../runtime/pushEnvironment';
 import { applyIncomingRingtone, defaultRingtone, loadIncomingRingtone } from '../media/ringtone';
-import { getVoicePushToken, loadVoiceSession, persistVoiceSession, voipClient } from '../runtime/voipClient';
-import { ensureSipRegistration, onSipRegistration, refreshVocivoSip, unregisterVocivoSip } from '../runtime/sipNative';
+import { getVoicePushToken, loadVoiceSession, persistVoiceSession, rememberVoicePushDeviceId, voicePushDeviceId, voipClient, type VoiceDeviceRegistration } from '../runtime/voipClient';
+import { ensureSipRegistration, onSipRegistration, onVocivoPushToken, refreshVocivoSip, unregisterVocivoSip } from '../runtime/sipNative';
 import { sipEngine, telnyxEngine } from './engines';
 import { voice } from './voiceClientFacade';
 import { isVoiceSessionFresh } from '../media/voiceRecovery';
@@ -26,6 +26,14 @@ type VoiceRegistrationInput = {
   setError: Dispatch<SetStateAction<string | null>>;
   setPushRegistration: Dispatch<SetStateAction<VoiceContextValue['pushRegistration']>>;
 };
+
+/**
+ * How many times the OS may answer "no push token yet" before the app stops
+ * calling it a registration in progress. Two attempts is a few seconds of the
+ * ordinary case — the token is usually there on the first or second ask — and
+ * anything past that is a phone whose owner has refused notifications.
+ */
+const unavailablePushAttempts = 2;
 
 export function useVoiceRegistration({
   onEngineSelected,
@@ -56,7 +64,7 @@ export function useVoiceRegistration({
     }
 
     let canceled = false;
-    let tokenTimer: ReturnType<typeof setInterval> | undefined;
+    let pushTokenTimer: ReturnType<typeof setTimeout> | undefined;
     let sessionRefreshTimer: ReturnType<typeof setTimeout> | undefined;
     let activeRegistrationTimer: ReturnType<typeof setTimeout> | undefined;
     let networkRefreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -69,6 +77,7 @@ export function useVoiceRegistration({
     let startupRetryTimer: ReturnType<typeof setTimeout> | undefined;
     let appStateSubscription: ReturnType<typeof AppState.addEventListener> | undefined;
     let networkSubscription: (() => void) | undefined;
+    let pushTokenSubscription: { remove: () => void } | undefined;
 
     const connect = async () => {
       try {
@@ -111,12 +120,15 @@ export function useVoiceRegistration({
         let storedPushToken: string | undefined;
         if (pushNotificationDeviceToken) {
           try {
-            await api.post('/api/voice/devices', {
+            const deviceId = await voicePushDeviceId();
+            const registration = await api.post<VoiceDeviceRegistration>('/api/voice/devices', {
               platform: Platform.OS === 'ios' ? 'ios' : 'android',
               token: pushNotificationDeviceToken,
               environment: pushEnvironment(NativeModules.VocivoSip?.pushEnvironment, __DEV__),
               bundleId: 'app.vocivo.mobile',
+              ...(deviceId ? { deviceId } : {}),
             });
+            await rememberVoicePushDeviceId(registration?.device?.id);
             storedPushToken = pushNotificationDeviceToken;
           } catch (failure) {
             reportVoiceError('register Vocivo wakeup token', failure);
@@ -214,6 +226,8 @@ export function useVoiceRegistration({
         let registeredToken = storedPushToken;
         let registrationBusy = false;
         let sessionRefreshBusy = false;
+        let missingTokenAttempts = 0;
+        let pushTokenAttempt = 0;
 
         const login = async (pushToken?: string, session = loginConfigRef.current) => {
           // On the SIP edge the phone is already registered with Vocivo's own
@@ -292,12 +306,27 @@ export function useVoiceRegistration({
           registrationBusy = true;
           try {
             const token = await getVoicePushToken();
-            if (canceled || !token || token === registeredToken) return;
+            if (canceled) return;
+            if (!token) {
+              // Notifications refused, or the OS has simply not minted a token
+              // yet. Say so rather than sitting on "registering" forever, and
+              // let the caller decide how long to keep asking. Checked before
+              // comparing with the registered token, which is itself undefined
+              // until the first registration succeeds.
+              missingTokenAttempts += 1;
+              if (missingTokenAttempts >= unavailablePushAttempts) setPushRegistration('unavailable');
+              return;
+            }
+            missingTokenAttempts = 0;
+            if (token === registeredToken) return;
             setPushRegistration('registering');
-            await api.post('/api/voice/devices', {
+            const deviceId = await voicePushDeviceId();
+            const registration = await api.post<VoiceDeviceRegistration>('/api/voice/devices', {
               platform: Platform.OS === 'ios' ? 'ios' : 'android', token,
               environment: pushEnvironment(NativeModules.VocivoSip?.pushEnvironment, __DEV__), bundleId: 'app.vocivo.mobile',
+              ...(deviceId ? { deviceId } : {}),
             });
+            await rememberVoicePushDeviceId(registration?.device?.id);
             if (canceled) return;
             await login(token);
             registeredToken = token;
@@ -310,6 +339,27 @@ export function useVoiceRegistration({
           }
         };
 
+        /**
+         * Keeps asking the OS for a push token until it has one.
+         *
+         * This used to be a two-second interval with no end to it: on a phone
+         * whose owner refused notifications there is no token coming, and the
+         * poll ran for as long as the app did while the UI still said push was
+         * registering. Backing off caps that at one attempt a minute, and the
+         * PushKit callback (`onVocivoPushToken`) short-circuits the wait when a
+         * token does arrive.
+         */
+        const pollForPushToken = () => {
+          if (canceled || registeredToken) return;
+          if (pushTokenTimer) clearTimeout(pushTokenTimer);
+          pushTokenTimer = setTimeout(() => {
+            pushTokenTimer = undefined;
+            registerLatestDevice()
+              .catch((failure) => reportVoiceError('refresh push registration token', failure))
+              .finally(() => { pushTokenAttempt += 1; pollForPushToken(); });
+          }, Math.min(60_000, 2000 * 2 ** Math.min(pushTokenAttempt, 5)));
+        };
+
         if (!launchedFromPush) await login(pushNotificationDeviceToken);
         if (canceled) return;
         if (initialSession) scheduleSessionRefresh(initialSession);
@@ -319,14 +369,11 @@ export function useVoiceRegistration({
           // Keep push status separate and retry failures without restarting SIP.
           if (onSipEdge) {
             registerLatestDevice().catch((failure) => reportVoiceError('register Vocivo wakeup token', failure));
+            pushTokenSubscription = onVocivoPushToken(() => {
+              registerLatestDevice().catch((failure) => reportVoiceError('register issued VoIP token', failure));
+            });
           }
-          tokenTimer = setInterval(() => {
-            registerLatestDevice().then(() => {
-              if (!registeredToken || !tokenTimer) return;
-              clearInterval(tokenTimer);
-              tokenTimer = undefined;
-            }).catch((failure) => reportVoiceError('refresh push registration token', failure));
-          }, 2000);
+          pollForPushToken();
         }
         appStateSubscription = AppState.addEventListener('change', (state) => {
           if (state !== 'active' || canceled) return;
@@ -377,7 +424,8 @@ export function useVoiceRegistration({
     connect();
     return () => {
       canceled = true;
-      if (tokenTimer) clearInterval(tokenTimer);
+      if (pushTokenTimer) clearTimeout(pushTokenTimer);
+      pushTokenSubscription?.remove();
       if (sessionRefreshTimer) clearTimeout(sessionRefreshTimer);
       if (activeRegistrationTimer) clearTimeout(activeRegistrationTimer);
       if (networkRefreshTimer) clearTimeout(networkRefreshTimer);

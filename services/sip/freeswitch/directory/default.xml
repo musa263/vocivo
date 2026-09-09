@@ -1,8 +1,13 @@
 <include>
+  <!-- The one directory entry this switch has, and it is not a credential.
+       Nothing on this edge authenticates against the directory: external and
+       trunk both set auth-calls=false (admission is decided by Kamailio and by
+       the API before a call ever reaches sofia), and internal is disabled
+       outright. The static password that used to sit here was therefore
+       unused, and an unused password on a host whose loopback is shared with
+       every other container in the stack is only a liability — so it is gone.
+       The record stays for the context it names. -->
   <user id="kamailio">
-    <params>
-      <param name="password" value="internal-media-path"/>
-    </params>
     <variables>
       <variable name="user_context" value="default"/>
     </variables>

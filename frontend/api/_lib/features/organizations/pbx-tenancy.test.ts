@@ -6,6 +6,9 @@ test('keeps company PBX routing and AI settings isolated', () => {
   const config = defaultPbxConfig();
   config.company.name = 'Global Heritage';
   config.organizations[0].name = 'Global Heritage';
+  // The tenant below picks a different zone; this one is set explicitly so the
+  // assertion proves isolation rather than that two tenants share a default.
+  config.officeHours.timezone = 'Asia/Riyadh';
   config.organizations.push({
     id: 'second-company', name: 'Second Company', slug: 'second-company', accountType: 'business',
     ownerDisplayName: 'Second Company', ownerEmail: 'owner@example.com', extensionStart: 3000,

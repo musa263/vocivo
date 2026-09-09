@@ -25,12 +25,17 @@ export function Dialer({ rates, selectedNumber, voice, accountType, initialNumbe
   const internal = route.kind === 'internal';
   const short = internal || route.kind === 'self' || route.kind === 'unknown-extension';
   const carrierPending = !short && selectedNumber?.source === 'carrier' && selectedNumber.status !== 'ready';
+  // The last call's failure belongs to the number that caused it. Editing the
+  // destination — which is also how the keypad switches between an extension
+  // and an external number — used to carry "Use a complete international
+  // destination" onto the extension the person was now dialling.
+  const editNumber = (update) => { setNumber(update); setCallError(''); voice.clearError?.(); };
   const zeroHold = useRef({ timer: null, fired: false });
   useEffect(() => () => window.clearTimeout(zeroHold.current.timer), []);
   function endZeroHold() { window.clearTimeout(zeroHold.current.timer); zeroHold.current.timer = null; }
   function pressKey(key) {
     if (key === '0' && zeroHold.current.fired) { zeroHold.current.fired = false; return; }
-    setNumber(current => cleanCallInput(current + key)); setCallError('');
+    editNumber(current => cleanCallInput(current + key));
   }
   async function call() {
     if (starting.current || voice.callStarting || voice.active || carrierPending || !['internal', 'external'].includes(route.kind)) return;
@@ -49,12 +54,12 @@ export function Dialer({ rates, selectedNumber, voice, accountType, initialNumbe
         {business && <button className="icon-button" aria-label="Company colleagues" title="Company colleagues" aria-expanded={teamOpen} onClick={() => setTeamOpen(value => !value)}><UsersRound size={22} /></button>}
         <div className={`status-badge ${voice.ready ? 'online' : ''}`}>{voice.ready ? <Wifi size={15} /> : <WifiOff size={15} />}{voice.ready ? 'Ready for calls' : voice.statusLabel}</div>
       </div></header>
-      {teamOpen && <div className="dialer-team" aria-label="Company colleagues">{directory.users.filter(user => user.id !== profile?.id).map(user => <button key={user.id} onClick={() => { setNumber(user.extension); setTeamOpen(false); setCallError(''); }}><PresenceDot presence={user.presence} /><span><strong>{user.name}</strong><small>Extension {user.extension}</small></span><Phone size={18} /></button>)}{directory.status === 'loading' && <p role="status">Loading colleagues...</p>}{directory.status === 'failed' && <button onClick={directory.retry}>Retry company directory</button>}</div>}
+      {teamOpen && <div className="dialer-team" aria-label="Company colleagues">{directory.users.filter(user => user.id !== profile?.id).map(user => <button key={user.id} onClick={() => { editNumber(user.extension); setTeamOpen(false); }}><PresenceDot presence={user.presence} /><span><strong>{user.name}</strong><small>Extension {user.extension}</small></span><Phone size={18} /></button>)}{directory.status === 'loading' && <p role="status">Loading colleagues...</p>}{directory.status === 'failed' && <button onClick={directory.retry}>Retry company directory</button>}</div>}
       <div className="dialer-layout"><div className="dialer-panel">
         <div className="dialer-identity" aria-live="polite">{internal ? <><PresenceDot presence={route.colleague?.presence} />{route.colleague?.name}</> : route.kind === 'self' ? 'This is your extension' : route.kind === 'unknown-extension' ? (directory.status === 'loading' ? 'Finding colleague...' : 'No matching company extension') : null}</div>
         <div className="destination-field">
-          <input value={number} onChange={event => { setNumber(cleanCallInput(event.target.value)); setCallError(''); }} placeholder={business ? 'Number or extension' : 'Phone number'} inputMode="tel" aria-label="Number to call" />
-          <button className="erase-button" onClick={() => setNumber(value => value.slice(0, -1))} disabled={!number} title="Delete digit"><Delete size={22} /></button>
+          <input value={number} onChange={event => editNumber(cleanCallInput(event.target.value))} placeholder={business ? 'Number or extension' : 'Phone number'} inputMode="tel" aria-label="Number to call" />
+          <button className="erase-button" onClick={() => editNumber(value => value.slice(0, -1))} disabled={!number} title="Delete digit"><Delete size={22} /></button>
         </div>
         <div className="keypad" aria-label="Phone keypad">{KEYS.map(([key, letters]) => <button key={key} onClick={() => pressKey(key)} onPointerDown={key === '0' ? () => { endZeroHold(); zeroHold.current.fired = false; zeroHold.current.timer = window.setTimeout(() => { zeroHold.current.fired = true; setNumber(current => cleanCallInput('+' + current)); }, 550); } : undefined} onPointerUp={key === '0' ? endZeroHold : undefined} onPointerLeave={key === '0' ? endZeroHold : undefined} onPointerCancel={key === '0' ? endZeroHold : undefined}><strong>{key}</strong><small>{letters}</small></button>)}</div>
         {(callError || voice.error) ? <div className="inline-error" role="alert">{callError || voice.error}</div> : voice.notice && <div className="call-notice" role="status"><PhoneOff size={18} /><span>{voice.notice}</span></div>}

@@ -1,4 +1,4 @@
-import type { VocivoSession } from '../auth/auth.js';
+import { isPlatformOwnerSession, type VocivoSession } from '../auth/auth.js';
 import { readPbxConfig, type PbxConfig } from './pbx-config-store.js';
 import { effectiveEntitlements, readTenantSaasState, type FeatureKey } from './saas-store.js';
 
@@ -10,7 +10,13 @@ type TenantAccess = ReturnType<typeof effectiveEntitlements> & {
 export type SessionAccess = PlatformAccess | TenantAccess;
 
 export async function accessForSession(session: VocivoSession, config?: PbxConfig): Promise<SessionAccess> {
-  if (session.sub === 'vocivo-owner' && session.role === 'superadmin') return { superadmin: true as const };
+  // The same test requireAdmin uses. These two disagreed — one accepted owner
+  // and superadmin, this one only superadmin — so a session carrying the owner
+  // role would pass as a platform administrator there and fall through to
+  // accessForOrganization('') here, answering the platform owner with
+  // "not enabled for this company". Unreachable only because createSession
+  // hardcodes the role, which is precisely how it would survive to bite later.
+  if (isPlatformOwnerSession(session)) return { superadmin: true as const };
   const pbx = config || await readPbxConfig();
   return accessForOrganization(session.organizationId || '', pbx);
 }

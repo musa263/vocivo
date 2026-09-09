@@ -6,6 +6,8 @@ import io
 import logging
 import os
 import queue
+import re
+import secrets
 import threading
 import time
 import wave
@@ -62,6 +64,12 @@ render_locks = tuple(threading.Lock() for _ in range(512))
 
 ready = threading.Event()
 warm_error = ""
+
+# A cache entry is named by its sha256; what the public route serves is named
+# by sixteen random bytes. The two are different lengths on purpose, so a
+# content address can never be presented as a public name.
+_CACHE_KEY = re.compile(r"[0-9a-f]{64}")
+_PUBLIC_ID = re.compile(r"[0-9a-f]{32}")
 
 # Kokoro's voice packs, the same 37 the API offers as Vocivo.Kokoro.<Name>.
 # The first letter of a voice id is its language: a American English,
@@ -170,7 +178,7 @@ def evict_stale_cache_entries() -> None:
             except OSError:
                 continue
             if stat.st_mtime < cutoff:
-                entry.unlink(missing_ok=True)
+                _forget(entry)
                 continue
             entries.append((stat.st_mtime, stat.st_size, entry))
         total = sum(size for _, size, _ in entries)
@@ -181,10 +189,23 @@ def evict_stale_cache_entries() -> None:
         for _, size, entry in sorted(entries):
             if total <= cache_max_bytes:
                 break
-            entry.unlink(missing_ok=True)
+            _forget(entry)
             total -= size
     except OSError:
         pass  # eviction is best-effort; synthesis must never fail because of it
+
+
+def _forget(entry: Path) -> None:
+    """Removes a cache entry and the public name that pointed at it."""
+    pointer = entry.with_suffix(".pub")
+    try:
+        public_id = pointer.read_text().strip()
+    except OSError:
+        public_id = ""
+    if _PUBLIC_ID.fullmatch(public_id):
+        (cache_dir / f"{public_id}.ref").unlink(missing_ok=True)
+    pointer.unlink(missing_ok=True)
+    entry.unlink(missing_ok=True)
 
 
 def _cache_janitor() -> None:
@@ -195,6 +216,56 @@ def _cache_janitor() -> None:
 
 def cache_key(request: SpeechRequest) -> str:
     return hashlib.sha256(f"{request.voice}|{request.speed}|{request.input}".encode()).hexdigest()
+
+
+def public_id_for(path: Path) -> str:
+    """
+    The name the rendered audio is served under, which is deliberately not its
+    cache key.
+
+    /v1/audio/<id>.wav is the one route without a bearer token — it has to be,
+    because the URL is played by a carrier and opened by a browser — and while
+    the id was the cache key, that key was sha256 of voice, speed and the text.
+    Both halves of a tenant's greeting are audible to anyone who rings the
+    number, so anyone who had heard it could compute the id and fetch that
+    tenant's rendered prompts from the public base URL, and could walk the
+    fixed canned phrases across all thirty-seven voices without hearing
+    anything at all. A random name cannot be derived from the audio.
+
+    The name is kept beside the cache entry so a prompt rendered a second time
+    keeps the URL the API already handed out, and a `.ref` file points back at
+    the cache entry the route must serve.
+    """
+    pointer = path.with_suffix(".pub")
+    try:
+        existing = pointer.read_text().strip()
+        if _PUBLIC_ID.fullmatch(existing) and (cache_dir / f"{existing}.ref").is_file():
+            return existing
+    except OSError:
+        pass
+    public_id = secrets.token_hex(16)
+    _write_atomically(cache_dir / f"{public_id}.ref", path.stem)
+    _write_atomically(pointer, public_id)
+    return public_id
+
+
+def _write_atomically(path: Path, text: str) -> None:
+    temporary = path.with_name(f".{path.name}.{os.urandom(4).hex()}.tmp")
+    temporary.write_text(text)
+    os.replace(temporary, path)
+
+
+def cached_path_for_public_id(public_id: str) -> Path | None:
+    """The cache entry a public name stands for, or nothing if it names none."""
+    if not _PUBLIC_ID.fullmatch(public_id):
+        return None
+    try:
+        key = (cache_dir / f"{public_id}.ref").read_text().strip()
+    except OSError:
+        return None
+    if not _CACHE_KEY.fullmatch(key):
+        return None
+    return cache_dir / f"{key}.wav"
 
 
 def cached_path(request: SpeechRequest) -> Path:
@@ -320,7 +391,8 @@ def render(request: SpeechRequest, _: None = Depends(authorize)) -> dict:
         raise HTTPException(status_code=503, detail="PUBLIC_BASE_URL must be configured with HTTPS")
     was_cached = is_cached(request)
     path = render_to_cache(request)
-    return {"id": path.stem, "audio_url": f"{public_base_url}/v1/audio/{path.stem}.wav", "cached": was_cached}
+    public_id = public_id_for(path)
+    return {"id": public_id, "audio_url": f"{public_base_url}/v1/audio/{public_id}.wav", "cached": was_cached}
 
 
 @app.post("/v1/audio/prerender", status_code=202)
@@ -354,9 +426,10 @@ def prerender(request: PrerenderRequest, _: None = Depends(authorize)) -> dict:
 
 @app.get("/v1/audio/{audio_id}.wav")
 def audio(audio_id: str) -> FileResponse:
-    if len(audio_id) != 64 or any(character not in "0123456789abcdef" for character in audio_id):
-        raise HTTPException(status_code=404, detail="Audio not found")
-    path = cache_dir / f"{audio_id}.wav"
-    if not path.exists():
+    # The one route with no bearer token, because the carrier and the browser
+    # play the URL directly. It answers only to a name /v1/audio/render made
+    # up, never to a cache key: see public_id_for.
+    path = cached_path_for_public_id(audio_id)
+    if path is None or not path.exists():
         raise HTTPException(status_code=404, detail="Audio not found")
     return FileResponse(path, media_type="audio/wav", headers={"Cache-Control": "public, max-age=31536000, immutable"})

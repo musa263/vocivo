@@ -211,6 +211,21 @@ test('registration events map onto the connection states VoiceContext already ha
   assert.deepEqual(seen, ['DISCONNECTED', 'CONNECTING', 'CONNECTED', 'ERROR', 'DISCONNECTED']);
 });
 
+test('an unregister we asked for lets go of its calls before it reports the disconnection', () => {
+  const events = fakeEvents();
+  const { bridge } = fakeBridge();
+  const client = new SipVoiceClient({ bridge, events: events.source });
+  events.emit('registration', { state: 'ok' });
+  events.emit('incoming', { callId: 'c1' });
+  const seen: Array<{ state: string; calls: number }> = [];
+  client.connectionState$.subscribe((state) => seen.push({ state, calls: client.currentCalls.length }));
+  events.emit('registration', { state: 'none', requested: true });
+  // The call has to be gone by the time the UI is told, or a sign-out reads as
+  // a transport failure on a call the UI still believes in.
+  assert.deepEqual(seen.at(-1), { state: 'DISCONNECTED', calls: 0 });
+  assert.equal(client.currentActiveCall, null);
+});
+
 test('logout hangs up everything, unregisters, and reports disconnected', async () => {
   const events = fakeEvents();
   const { bridge, calls } = fakeBridge();
