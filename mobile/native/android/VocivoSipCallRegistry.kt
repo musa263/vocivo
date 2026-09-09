@@ -76,12 +76,30 @@ object VocivoSipCallRegistry {
     mutedMicrophone = muted
   }
 
+  /**
+   * Puts the device into call audio mode before there is any media to carry.
+   *
+   * WebRTC builds its recorder and its player the moment the answered session
+   * hands it tracks, and it builds them for whatever mode the device is in at
+   * that instant. On a call woken by FCM the user can answer while the INVITE
+   * is still being waited for, so the tracks arrive seconds later and, until
+   * this ran on answer, the only thing that ever claimed the mode was the
+   * Speaker button — a call nobody pressed it on came up recorded and played
+   * against the media stream. `releaseAudio` gives the mode back through the
+   * same flag, so claiming it early costs the rest of the phone nothing.
+   */
   @Synchronized
-  fun setSpeakerphone(context: Context, on: Boolean) {
+  fun claimAudio(context: Context) {
     application = context.applicationContext
     val manager = audioManager(context) ?: return
     manager.mode = AudioManager.MODE_IN_COMMUNICATION
     claimedAudioMode = true
+  }
+
+  @Synchronized
+  fun setSpeakerphone(context: Context, on: Boolean) {
+    claimAudio(context)
+    val manager = audioManager(context) ?: return
     @Suppress("DEPRECATION")
     manager.isSpeakerphoneOn = on
   }

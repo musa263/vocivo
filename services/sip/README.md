@@ -65,11 +65,31 @@ The AOR lock covers contact lookup through transaction storage, so registration
 cannot fall between them. Each waiting entry has its own 45-second deadline;
 the queue expires independently and retains simultaneous callers.
 
+A suspended call answers its caller straight away with `180 Ringing`, before
+the push goes out. Without it the caller had only tm's automatic `100 Trying`
+— which starts no ringback and shows no state — for as long as the push, the
+app launch and the REGISTER took, while the callee's CallKit screen was already
+ringing; callers read that silence as a call that had not been placed. The
+provisional is issued *after* `t_suspend`, which keeps the `100 Trying` that
+`t_suspend` itself sends, and it carries no SDP so the caller generates its own
+ringback rather than having early media bridged through FreeSWITCH for a call
+that never touches it. The receiver's own 180 still travels afterwards under a
+different To-tag; that second early dialog is what any forking proxy produces.
+
 Never append receiver branches to a transaction left in `t_suspend`:
-Kamailio 5.8.4 discards responses while `T_ASYNC_SUSPENDED` remains set. That
-loses both the 180 that starts web/mobile caller ringback and the receiver's
-200 answer. The resumed route must not rerun `rtpengine_manage` in its failure
-context, which would delete the already-created media offer.
+Kamailio 5.8.4 discards the responses a *branch* sends back while
+`T_ASYNC_SUSPENDED` remains set. That loses both the 180 that starts web/mobile
+caller ringback and the receiver's 200 answer. A reply the script generates
+itself is not relayed from a branch and is unaffected. The resumed route must
+not rerun `rtpengine_manage` in its failure context, which would delete the
+already-created media offer.
+
+The 45-second ring window is measured from the INVITE, not from the push, so
+the push, the app launch and the REGISTER all come out of it. It is set in two
+places that have to move together — `t_set_max_lifetime` here and
+`WAKE_TTL_SECONDS` in `api/_lib/features/sip/routes/voice-sip-wakeup.ts` — and
+because ours starts earlier, a call answered in the last seconds of the phone's
+own ringing can find the transaction already gone.
 
 WebRTC offers/answers use `rtcp-mux-offer rtcp-mux-require` and
 `UDP/TLS/RTP/SAVPF`. The old `RTCP-MUX` flag was rejected by the running

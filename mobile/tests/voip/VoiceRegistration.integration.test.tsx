@@ -1,10 +1,21 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
+// The mock has to carry everything the modules under test reach for at import
+// time, not merely what the assertions use. This suite had been failing to load
+// at all — silently costing the registration path its only integration cover,
+// which is exactly the path push wake-ups and credential renewal run through —
+// because AuthContext builds a StyleSheet as a module-level constant and the
+// mock stopped at AppState.
 jest.mock('react-native', () => ({
   AppState: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
   NativeModules: { VocivoSip: {} },
   Platform: { OS: 'ios' },
+  StyleSheet: { create: (styles: Record<string, unknown>) => styles, flatten: (style: unknown) => style },
+  View: 'View',
+  Text: 'Text',
+  Pressable: 'Pressable',
+  ActivityIndicator: 'ActivityIndicator',
 }));
 jest.mock('@react-native-community/netinfo', () => ({
   __esModule: true, default: { addEventListener: jest.fn(() => jest.fn()) },

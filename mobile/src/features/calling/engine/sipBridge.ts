@@ -269,6 +269,7 @@ export class SipStackBridge implements NativeSipBridge {
     // events, and no late ACTIVE/HELD update may recreate this call.
     session.terminal = true;
     this.sessions.delete(callId);
+    this.releaseSpeakerWhenIdle();
     let disposal: Promise<void>;
     try {
       disposal = session.handle.dispose();
@@ -322,6 +323,25 @@ export class SipStackBridge implements NativeSipBridge {
     return this.speaker;
   }
 
+  /**
+   * The audio route belongs to the call, not to the app.
+   *
+   * CallKit and Android's telecom stack both configure a fresh session for each
+   * call, and neither carries a loudspeaker override into the next one. This
+   * flag is what the in-app Speaker button negates and what the call screen
+   * draws, so a call that ended on speaker left the following one insisting on
+   * a route it did not have: the phone was held away from the ear while the
+   * audio came out of the earpiece, and the first tap of Speaker turned the
+   * loudspeaker off. Nothing is pushed to the platform here on purpose —
+   * Android's `setSpeaker` claims the communication audio mode, which is
+   * exactly what the end of a call has just handed back.
+   */
+  private releaseSpeakerWhenIdle() {
+    if (!this.speaker || this.sessions.size > 0) return;
+    this.speaker = false;
+    this.events.emit('mediaState', { callId: '', speaker: false });
+  }
+
   private adoptIncoming(handle: SipSessionHandle) {
     this.track(handle);
     this.events.emit('incoming', {
@@ -351,6 +371,7 @@ export class SipStackBridge implements NativeSipBridge {
         // Keep nothing: the engine holds its own record of finished calls, and
         // a stale handle here would leak a peer connection per call.
         this.sessions.delete(handle.id);
+        this.releaseSpeakerWhenIdle();
       }
       if (next) this.emitState(handle.id, next, disposition?.reason, disposition?.statusCode);
     });

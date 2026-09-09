@@ -40,6 +40,11 @@ class VocivoConnection(private val callId: String, private val context: Context)
       return
     }
     answering = true
+    // Before JavaScript hears about the answer, not after it reports the call
+    // active: the SIP session and its tracks may still be several seconds away
+    // on an FCM-woken call, and WebRTC builds its audio path against whatever
+    // mode the device is in when the tracks arrive.
+    VocivoSipCallRegistry.claimAudio(context)
     main.postDelayed(answerDeadline, 12_000)
     VocivoSipCallRegistry.emit("callUiAnswer", "callId" to callId)
   }
