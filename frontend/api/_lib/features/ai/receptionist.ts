@@ -3,7 +3,7 @@ import { isRecommendedVoice, vocivoVoices, voiceDefinition, voiceGradeRank } fro
 import type { PbxConfig } from '../organizations/pbx-config-store.js';
 import { normalizeE164 } from '../organizations/tenancy.js';
 import { officeHoursDecision } from '../organizations/office-hours.js';
-import { shippedCompanyKnowledge } from './company-knowledge/global-heritage.js';
+import { seedTenantKnowledge } from './company-knowledge/seed-tenant-knowledge.js';
 
 /**
  * The control plane for Vocivo's own AI receptionist.
@@ -159,6 +159,8 @@ export type ProfileInput = {
   /** Organization-scoped view, as `pbxForOrganization` returns it. */
   tenantFor: (organizationId: string) => PbxConfig;
   extensionsFor: (organizationId: string) => Promise<ExtensionUser[]>;
+  /** One-time migration of a shipped company brief into the tenant's own settings. Omitted in tests. */
+  seedKnowledge?: (organizationId: string) => Promise<string>;
   now?: Date;
 };
 
@@ -179,6 +181,11 @@ export async function receptionistFor(input: ProfileInput): Promise<Receptionist
   if (!ai?.enabled) return null;
 
   const extensions = await input.extensionsFor(assignment.organizationId);
+  // A brief that used to be compiled into the platform moves into this tenant's
+  // own knowledge box the first time their receptionist answers, so their
+  // administrator can edit it. Anything already typed there wins, and once the
+  // move has happened an empty box stays empty.
+  const knowledge = ai.knowledge?.trim() || (input.seedKnowledge ? await input.seedKnowledge(assignment.organizationId) : '');
   // Nobody is at their desk after hours: the receptionist answers, but it
   // takes messages instead of putting callers through to an empty office.
   const officeOpen = officeHoursDecision(tenant.officeHours, input.now || new Date()).open;
@@ -194,7 +201,7 @@ export async function receptionistFor(input: ProfileInput): Promise<Receptionist
     greeting: ai.greeting,
     // The knowledge base is part of the brief, not a separate retrieval step:
     // a receptionist's worth of company facts fits in a prompt.
-    instructions: [ai.instructions, ai.knowledge?.trim() || shippedCompanyKnowledge(tenant.company?.name || '')].filter((part) => part && part.trim()).join('\n\n'),
+    instructions: [ai.instructions, knowledge].filter((part) => part && part.trim()).join('\n\n'),
     voice: receptionistVoice(ai.voice),
     language: ai.language || 'en',
     transferEnabled: Boolean(ai.transferEnabled) && targets.length > 0,

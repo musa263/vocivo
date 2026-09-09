@@ -129,7 +129,12 @@ class Quality(unittest.IsolatedAsyncioTestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'caller.wav'
             path.write_bytes(b'caller audio')
-            ears = Ears(Settings())
+            # One slot, so the assertion below is about the property under
+            # test — a cancelled transcription keeps its slot until the native
+            # worker exits — and not about how many slots the gate happens to
+            # have. Sizing the gate is a capacity decision; holding the slot is
+            # a correctness one, and only the second belongs in this test.
+            ears = Ears(Settings(stt_concurrency=1))
             ears._load = AsyncMock(return_value=Mock(transcribe=transcribe))
             first = asyncio.create_task(ears.transcribe(path))
             try:

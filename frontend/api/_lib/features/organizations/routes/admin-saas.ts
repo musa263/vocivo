@@ -109,7 +109,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       };
       const newSettings = organizationSettingsFrom(defaultPbxConfig());
       newSettings.company = { ...newSettings.company, name, callingMode: 'carrier' };
-      config = await savePbxConfig({ organizations: [...config.organizations.filter((item) => item.id !== id), organization],
+      // Editing a customer must not move it: the order of this list is the
+      // order the console shows, and it used to decide which tenant owned the
+      // settings that predate multi-tenancy. An edit replaces the row in place.
+      const organizations = existing
+        ? config.organizations.map((item) => (item.id === id ? organization : item))
+        : [...config.organizations, organization];
+      config = await savePbxConfig({ organizations,
         ...(!existing ? { organizationSettings: { ...config.organizationSettings, [id]: newSettings } } : {}),
       }, { expectedUpdatedAt: config.updatedAt });
       state = await readPlatformSaasState(config);

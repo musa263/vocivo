@@ -31,6 +31,16 @@ class Settings:
     #: played from here, and recordings arrive the same way.
     audio_dir: str = "/var/lib/vocivo-receptionist"
 
+    #: How long a rendered prompt is kept, and how much disk the whole cache may
+    #: use. Every sentence the receptionist speaks is content-addressed and kept
+    #: so a repeated line is instant — but a model's answers are unique to their
+    #: call, so without a ceiling the cache grows for as long as the service
+    #: runs. This volume is on the same droplet as Kamailio, FreeSWITCH and
+    #: rtpengine: filling it would take telephony down, not just the assistant.
+    prompt_cache_seconds: int = 7 * 24 * 3600
+    prompt_cache_max_bytes: int = 512 * 1024 * 1024
+    prompt_cache_sweep_seconds: int = 900
+
     #: Conversation is dry speech by default, not hold music. An explicit
     #: operator setting can still opt into a FreeSWITCH-readable background bed.
     speech_bed: str = ""
@@ -40,6 +50,12 @@ class Settings:
     stt_model: str = "base"
     stt_compute_type: str = "int8"
     stt_language: str = "en"
+    #: How many turns may be transcribed at once, and how long a turn may wait
+    #: for a free slot. Inference is CPU-bound, so the limit exists to keep it
+    #: within the container's share — but set to one it also capped the service
+    #: at a single concurrent caller.
+    stt_concurrency: int = 2
+    stt_queue_seconds: float = 12.0
 
     #: The one part that is not self-hosted. Everything else in the call path
     #: — telephony, speech recognition, the voice — runs on Vocivo hardware.
@@ -113,10 +129,15 @@ class Settings:
             tts_secret=text("TTS_SERVICE_SECRET", ""),
             tts_voice=text("TTS_VOICE", cls.tts_voice),
             audio_dir=text("RECEPTIONIST_AUDIO_DIR", cls.audio_dir),
+            prompt_cache_seconds=max(3600, number("RECEPTIONIST_PROMPT_CACHE_SECONDS", cls.prompt_cache_seconds)),
+            prompt_cache_max_bytes=max(16 * 1024 * 1024, number("RECEPTIONIST_PROMPT_CACHE_MAX_BYTES", cls.prompt_cache_max_bytes)),
+            prompt_cache_sweep_seconds=max(60, number("RECEPTIONIST_PROMPT_CACHE_SWEEP_SECONDS", cls.prompt_cache_sweep_seconds)),
             speech_bed=text("RECEPTIONIST_SPEECH_BED", cls.speech_bed),
             stt_model=text("STT_MODEL", cls.stt_model),
             stt_compute_type=text("STT_COMPUTE_TYPE", cls.stt_compute_type),
             stt_language=text("STT_LANGUAGE", cls.stt_language),
+            stt_concurrency=max(1, min(8, number("STT_CONCURRENCY", cls.stt_concurrency))),
+            stt_queue_seconds=max(1.0, float(number("STT_QUEUE_SECONDS", int(cls.stt_queue_seconds)))),
             llm_api_key=text("LLM_API_KEY", ""),
             llm_model=text("LLM_MODEL", cls.llm_model),
             llm_base_url=text("LLM_BASE_URL", cls.llm_base_url).rstrip("/"),
@@ -134,7 +155,11 @@ class Settings:
             barge_in_silence_ms=max(100, number("RECEPTIONIST_BARGE_IN_SILENCE_MS", cls.barge_in_silence_ms)),
             patience_seconds=number("RECEPTIONIST_PATIENCE_SECONDS", cls.patience_seconds),
             max_turns=number("RECEPTIONIST_MAX_TURNS", cls.max_turns),
-            idle_hangup_seconds=max(1, min(90, number("RECEPTIONIST_IDLE_HANGUP_SECONDS", cls.idle_hangup_seconds))),
+            # The ceiling used to be the default, so an operator who asked for a
+            # longer window silently got ninety seconds. A caller looking up an
+            # order number or fetching a colleague is not a caller who walked
+            # away; an hour is the limit, to stop a forgotten line staying open.
+            idle_hangup_seconds=max(1, min(3600, number("RECEPTIONIST_IDLE_HANGUP_SECONDS", cls.idle_hangup_seconds))),
         )
 
     def missing(self) -> list[str]:

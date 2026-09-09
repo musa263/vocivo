@@ -198,11 +198,30 @@ test('office hours are described the way a person says them', async () => {
   assert.equal(describeOfficeHours({ timezone: 'UTC', holidays: [], weekdays: Object.fromEntries(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((name) => [name, day('00:00', '23:59')])) }), 'Monday to Sunday, all day.');
 });
 
-test('the receptionist knows the company from its website when the knowledge box is empty', async () => {
-  const { shippedCompanyKnowledge } = await import('./company-knowledge/global-heritage.js');
-  assert.match(shippedCompanyKnowledge('Global Heritage'), /\+966 53 545 8080/);
-  assert.match(shippedCompanyKnowledge('GHSL'), /info@ghsl\.us/);
-  assert.equal(shippedCompanyKnowledge('Acme Dental'), '');
+test('a shipped company brief belongs to one tenant and reaches no other', async () => {
+  const { seedKnowledgeFor } = await import('./company-knowledge/seed-tenant-knowledge.js');
+  assert.match(seedKnowledgeFor('Global Heritage Systems LTD', true), /\+966 53 545 8080/);
+  assert.equal(seedKnowledgeFor('Acme Dental', true), '', 'another tenant must never be given a company brief that is not theirs');
+  assert.equal(seedKnowledgeFor('Global Heritage Systems LTD', false), '', 'a tenant that renames itself to match must not be handed the brief');
+  assert.equal(seedKnowledgeFor('', true), '');
+});
+
+test('the knowledge an administrator typed is never replaced by a seed', async () => {
+  let seeded = false;
+  const profile = await receptionistFor({ ...inputFor(config()), seedKnowledge: async () => { seeded = true; return 'a brief that must not be used'; } });
+  assert.match(profile!.instructions, /We close at five/);
+  assert.doesNotMatch(profile!.instructions, /must not be used/);
+  assert.equal(seeded, false, 'a filled knowledge box must not trigger the one-time seed');
+});
+
+test('an empty knowledge box takes the tenant seed once and nothing else', async () => {
+  const empty = config();
+  (empty as unknown as { ai: { knowledge: string } }).ai.knowledge = '';
+  const profile = await receptionistFor({ ...inputFor(empty), seedKnowledge: async () => 'Seeded company facts.' });
+  assert.match(profile!.instructions, /Seeded company facts\./);
+
+  const none = await receptionistFor({ ...inputFor(empty), seedKnowledge: async () => '' });
+  assert.equal(none!.instructions, 'Be brief.', 'a tenant the platform ships no brief for gets only its own instructions');
 });
 
 test('idle release remains a distinct successful service outcome', () => {

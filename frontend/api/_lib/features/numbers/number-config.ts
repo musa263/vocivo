@@ -23,8 +23,12 @@ const defaults: BusinessVoiceConfig = {
   voicemailEnabled: false,
   voicemailDelaySeconds: 25,
   voicemailGreeting: 'We are unable to answer your call. Please leave a message after the tone.',
-  companyName: 'Global Heritage',
-  greeting: 'Welcome to Global Heritage.',
+  // No company's name ships in the platform. Both are filled in from the
+  // tenant's own organization name by `withCompanyIdentity` on the way out, so
+  // an unconfigured tenant greets callers as themselves and never as whichever
+  // company Vocivo happened to serve first.
+  companyName: '',
+  greeting: '',
   waitingMessage: 'Thank you for waiting. A member of our team will be with you shortly.',
   departments: ['Sales', 'Operations'],
   voice: 'AWS.Polly.Joanna-Neural',
@@ -150,12 +154,27 @@ async function readTaggedBusinessVoiceConfigFromCarrier(): Promise<BusinessVoice
 // to the same one the rest of the legacy settings belong to.
 const resolveLegacyPrimaryOrganizationId = legacyPrimaryOrganizationId;
 
+/**
+ * Fills in the company name and greeting a tenant never set.
+ *
+ * The stored configuration may legitimately be silent about both — a carrier
+ * tag that predates the field, a customer who never opened the voice screen, a
+ * carrier read that failed. The answer is the tenant's own organization name,
+ * never a name compiled into the platform, and a caller to a company that has
+ * not named itself hears a greeting with no company in it at all.
+ */
+function withCompanyIdentity(config: BusinessVoiceConfig, organizationName: string): BusinessVoiceConfig {
+  const companyName = config.companyName.trim() || (organizationName || '').trim();
+  const greeting = config.greeting.trim() || (companyName ? `Welcome to ${companyName}.` : 'Thank you for calling.');
+  return { ...config, companyName, greeting };
+}
+
 export async function readBusinessVoiceConfig(organizationId = 'primary'): Promise<BusinessVoiceConfig> {
   const pbx = await readPbxConfig();
-  if (pbx.businessVoiceConfigs[organizationId]) return { ...defaults, ...pbx.businessVoiceConfigs[organizationId] };
-  if (organizationId === resolveLegacyPrimaryOrganizationId(pbx)) return readTaggedBusinessVoiceConfig();
-  const organization = pbx.organizations.find((item) => item.id === organizationId);
-  return { ...defaults, companyName: organization?.name || defaults.companyName, greeting: `Welcome to ${organization?.name || defaults.companyName}.` };
+  const organizationName = pbx.organizations.find((item) => item.id === organizationId)?.name || '';
+  if (pbx.businessVoiceConfigs[organizationId]) return withCompanyIdentity({ ...defaults, ...pbx.businessVoiceConfigs[organizationId] }, organizationName);
+  if (organizationId === resolveLegacyPrimaryOrganizationId(pbx)) return withCompanyIdentity(await readTaggedBusinessVoiceConfig(), organizationName);
+  return withCompanyIdentity(defaults, organizationName);
 }
 
 export async function saveBusinessVoiceConfig(input: Partial<BusinessVoiceConfig>, organizationId = 'primary') {

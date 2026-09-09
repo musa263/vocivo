@@ -56,7 +56,21 @@ class CallHandler:
         dialled = channel_variable(channel, "Caller-Destination-Number", "destination_number", "sip_to_user")
         log.info("call %s received", call_id[:8])
 
-        assistant = await self._api.assistant_for(dialled, caller)
+        try:
+            assistant = await self._api.assistant_for(dialled, caller)
+        except AssistantUnavailable as error:
+            # Our fault, not the caller's. Closing the socket without hanging up
+            # returns the call to the dialplan, whose fallback rings the staff —
+            # a company that cannot reach its receptionist still answers its
+            # phone. Hanging up here would drop every inbound call on the
+            # platform for as long as the API was unwell.
+            # Returning without hanging up closes the Event Socket and lets the
+            # dialplan continue past `socket`, where it sets vocivo_ai_unavailable
+            # itself and rings the staff. Setting that variable here would give it
+            # a value the dialplan does not match, and the fallback would not run.
+            log.error("call %s could not load its receptionist (%s); leaving the call to the dialplan", call_id[:8], error)
+            return
+
         if assistant is None:
             log.warning("call %s has no receptionist; releasing the call", call_id[:8])
             await connection.hangup("NO_ROUTE_DESTINATION")
@@ -149,10 +163,16 @@ class CallHandler:
                                 await self._transfer(connection, assistant.fallback_extension, dialled)
                                 transferred_to = assistant.fallback_extension
                                 outcome = "transferred"
-                            else:
-                                outcome = "error"
-                                await connection.hangup()
-                            break
+                                break
+                            # Nobody to put them through to, and we still cannot
+                            # hear them. Say so and keep listening: the caller
+                            # decides when this call is over, not the software.
+                            # If they have truly gone, the idle deadline ends it
+                            # with a goodbye.
+                            outcome = "error"
+                            recognition_failures = 0
+                            await self._speak(connection, CANNED["hearing_trouble"], assistant.voice)
+                            continue
                         silent_turns = 0
                         await self._speak(connection, "Sorry, I couldn't process that. Could you repeat that, please?", assistant.voice)
                         continue
@@ -225,6 +245,10 @@ class CallHandler:
             finally:
                 await asyncio.wait_for(connection.hangup(), timeout=3)
         except SpeechSynthesisError:
+            # The receptionist has lost its voice. It cannot apologise, so the
+            # caller must reach a person: transfer if there is one, otherwise
+            # close the socket and let the dialplan ring the staff. Hanging up
+            # would leave the caller with a dead line and no explanation.
             outcome = "error"
             allowed = {target.extension for target in assistant.targets}
             if assistant.office_open and assistant.transfer_enabled and assistant.fallback_extension in allowed:
@@ -233,10 +257,9 @@ class CallHandler:
                     transferred_to = assistant.fallback_extension
                     outcome = "transferred"
                 except Exception:
-                    log.exception("call %s voice failure fallback failed", call_id[:8])
-                    await connection.hangup()
+                    log.exception("call %s voice failure fallback failed; leaving the call to the dialplan", call_id[:8])
             else:
-                await connection.hangup()
+                log.warning("call %s has no voice and nobody to transfer to; leaving the call to the dialplan", call_id[:8])
         except asyncio.CancelledError:
             outcome = "caller_hung_up" if connection.hungup.is_set() else "error"
             raise
@@ -248,12 +271,11 @@ class CallHandler:
                 outcome = "error"
                 await self._release(connection)
         except Exception as error:  # noqa: BLE001 - never leave a caller on a dead line
-            log.exception("call %s failed: %s", call_id[:8], error)
+            # Something we did not anticipate. The caller is still on the line
+            # and has done nothing wrong, so the call goes back to the dialplan
+            # to ring the staff rather than being hung up on.
+            log.exception("call %s failed: %s; leaving the call to the dialplan", call_id[:8], error)
             outcome = "error"
-            try:
-                await connection.hangup()
-            except Exception:  # noqa: BLE001
-                log.exception("call %s could not be terminated after failure", call_id[:8])
         finally:
             prerender.cancel()
             await asyncio.gather(prerender, return_exceptions=True)
