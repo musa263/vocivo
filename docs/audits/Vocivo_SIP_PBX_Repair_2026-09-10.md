@@ -85,7 +85,10 @@ The official release references used for the version assessment are the
 [SignalWire's 1.11.3 announcement](https://support.signalwire.com/portal/en/community/topic/freeswitch-version-1-11-3-released).
 Upgrading does not replace the custom routing, policy and durability repairs.
 
-## Deployment and acceptance still required
+## Acceptance plan recorded before deployment
+
+The deployment results below supersede the deployment steps in this initial plan;
+carrier, device, retention and capacity acceptance remain open where stated.
 
 1. Record the intended application SHA, image digests, current live containers,
    Nginx/WSS timeouts, firewall rules and Go Telecom deployment/source mapping.
@@ -119,9 +122,10 @@ The unrelated office-hours timezone display and superadmin workspace AI-settings
 findings from the earlier engineering audit were not changed in this SIP/PBX
 repair. Open questions about internal route-grant replay/caller binding and
 synchronous control-plane worker starvation still require dedicated negative and
-load tests. Default loopback ESL credentials, the unpinned RTPEngine image and
-Android global microphone restoration remain separate security/runtime review
-items; no new live exposure or device failure was claimed or induced here.
+load tests. At the initial audit revision, default loopback ESL credentials, the
+unpinned RTPEngine image and Android global microphone restoration were separate
+review items. The consolidated release includes the subsequent fixes for these
+items; physical-device acceptance must still be demonstrated.
 
 The current production FreeSWITCH pin therefore remains an upgrade task even
 though the 1.11.3 candidate is locally compatible. Keep these remaining gates
@@ -159,3 +163,46 @@ recreation. Browser checks covered SIP lifecycle, company-admin/superadmin numbe
 assignments, and two-tab tenant isolation. Production deployment evidence is
 recorded by the release workflows; these local results do not certify live Go
 Telecom or physical mobile acceptance.
+
+## Production release evidence — 10 September 2026
+
+Runtime repairs were pushed to `main` as `b4718c07a2c79231944577caadfc8340646d5992`.
+The deployment-check follow-up is `5b066d81fca57ab885adb6d821479044fe92f6b2`;
+it changes only the Vercel workflow, not mobile or SIP runtime code.
+
+| Release/check | Result and evidence |
+| --- | --- |
+| Main quality gates | [Passed](https://github.com/musa263/vocivo/actions/runs/34473100430); [workflow follow-up also passed](https://github.com/musa263/vocivo/actions/runs/34486358247). |
+| Main SIP protocol validation | [Passed all three jobs](https://github.com/musa263/vocivo/actions/runs/34473100477): ingress, tenant carriers and temporary relay. These use isolated fixtures. |
+| SIP configuration rollout | [Succeeded](https://github.com/musa263/vocivo/actions/runs/34472773324). Idle-call/media barrier passed; configuration backed up to `/opt/vocivo/sip-backups/20260910114326`, private state to `/opt/vocivo/sip-state-backups/1789040644205471194`. Existing data was retained in persistent volumes. |
+| Live PBX status | [Verified](https://github.com/musa263/vocivo/actions/runs/34473090144): FreeSWITCH healthy; Kamailio, RTPEngine, TURN and outbox containers running; required modules loaded; zero active calls and zero rejected JSON CDR files at the check. |
+| AI receptionist | [Deployed successfully](https://github.com/musa263/vocivo/actions/runs/34485706402); speech-recognition model loaded, listening on `127.0.0.1:8084`. This verifies service readiness, not an end-to-end AI call. |
+| Web/API | [Final production deployment passed](https://github.com/musa263/vocivo/actions/runs/34486940967). Independent `/api/health?deep=1` request returned PostgreSQL available and exact revision `5b066d81fca57ab885adb6d821479044fe92f6b2`. |
+| Public WSS | Independent WebSocket connection to `wss://sip.vocivo.app/ws` succeeded with negotiated subprotocol `sip`. The host root returns 404 and is not the WebSocket path. This does not prove authenticated registration or RTP. |
+| iOS | [Production build 1.0.0 (68)](https://expo.dev/accounts/mousaothman/projects/vocivo/builds/d789f636-b4c6-44fe-9d1b-281406c3c194) finished; [submission to App Store Connect succeeded](https://expo.dev/accounts/mousaothman/projects/vocivo/submissions/4cec6823-1e6f-4db5-8576-831cb8eeac54). Apple processing/tester availability was not independently confirmed. |
+| Android | [Production build 1.0.0 (versionCode 2)](https://expo.dev/accounts/mousaothman/projects/vocivo/builds/d701262c-53a5-4d1e-93eb-34521068bde0) finished. It has not been published to Google Play. |
+
+Both mobile builds use `155987f8e5412de69d4393b457c35b124aa88600`; subsequent
+commits change Linux test fixtures, packaging and deployment verification only.
+
+The first Vercel run deployed successfully but failed its verification because
+the generated deployment hostname returned a redirect rather than health JSON.
+The corrected gate checks the customer-facing production alias and still requires
+the exact release SHA and healthy PostgreSQL. Negative checks reject stale
+revisions, unavailable storage and non-JSON responses.
+
+Rollout warnings remain visible: Docker Compose warned that the migrated volumes
+were created outside Compose, but mounted them successfully. FreeSWITCH emitted
+scheduler/nice-permission warnings during startup and later passed readiness and
+container health. Real-time scheduling under production load remains a capacity
+acceptance item; privileges were not broadened merely to suppress the warnings.
+The host status also reported UFW inactive; the effective DigitalOcean firewall
+and host packet-filter rules require a separate verified policy assessment.
+
+No Go carrier activation, number destination, IP migration, 3CX configuration or
+paid call was changed by this release. Live status showed only the existing
+managed gateway, so it does not establish an active Go Telecom interconnect.
+Go inbound/outbound audio, distinct DID routing, physical-device Gate A08,
+background/killed-state calling, load/retention controls and the remaining audit
+items above are still open. The deployed API deliberately reports telephony
+status as unchecked rather than inferring call success from HTTP health.
