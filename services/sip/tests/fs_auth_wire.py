@@ -3,13 +3,14 @@ import json
 import re
 import socket
 import uuid
-from auth import mock_auth, PORT
+import time
+from auth import mock_auth, PORT, exchange
 
 
 def invite(port, *, authorization=True, proxy=False):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.bind(('127.0.0.1', 0))
-        sock.settimeout(5)
+        sock.settimeout(0.5)
         tag = uuid.uuid4().hex
         target = f'sip:+12025550123@127.0.0.1:{port}'
         base = (f'Via: SIP/2.0/UDP 127.0.0.1:{sock.getsockname()[1]};branch=z9hG4bK{tag};rport\r\n'
@@ -20,9 +21,19 @@ def invite(port, *, authorization=True, proxy=False):
         if proxy:
             auth += 'Proxy-Authorization: ' + digest + '\r\n'
         body = 'v=0\r\no=probe 1 1 IN IP4 127.0.0.1\r\ns=probe\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 15190 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\n'
-        sock.sendto(f'INVITE {target} SIP/2.0\r\n{base}{auth}Content-Type: application/sdp\r\nContent-Length: {len(body)}\r\n\r\n{body}'.encode(), ('127.0.0.1', port))
+        packet = f'INVITE {target} SIP/2.0\r\n{base}{auth}Content-Type: application/sdp\r\nContent-Length: {len(body)}\r\n\r\n{body}'.encode()
+        sock.sendto(packet, ('127.0.0.1', port))
+        deadline = time.monotonic() + 10
+        provisional = False
         while True:
-            response = sock.recv(65536).decode()
+            try:
+                response = sock.recv(65536).decode()
+            except TimeoutError:
+                assert time.monotonic() < deadline, f'No final SIP reply on {port}; provisional={provisional}'
+                if not provisional:
+                    sock.sendto(packet, ('127.0.0.1', port))
+                continue
+            provisional = True
             code = int(response.split(' ')[1])
             if code >= 200:
                 break
@@ -34,6 +45,14 @@ def invite(port, *, authorization=True, proxy=False):
 
 
 def main():
+    deadline = time.monotonic() + 15
+    while True:
+        try:
+            if exchange('OPTIONS', authorized=False).startswith('SIP/2.0 200 '): break
+        except (TimeoutError, OSError):
+            pass
+        assert time.monotonic() < deadline, 'Kamailio listener did not become ready'
+        time.sleep(.2)
     # Same pinned production profile, including auth-calls=false. Supplying a
     # previous hop's credentials nevertheless triggers FreeSWITCH's Digest.
     assert invite(5080) == 407

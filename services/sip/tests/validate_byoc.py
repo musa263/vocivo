@@ -45,6 +45,10 @@ def main():
                     evidence.mkdir(parents=True, exist_ok=True)
                     logs = subprocess.run(['docker', 'logs', name], capture_output=True, text=True, timeout=30)
                     (evidence / 'freeswitch.log').write_text(logs.stdout + logs.stderr)
+                # Linux containers create the private outbox as root/0700.
+                # Return only this isolated fixture tree to the runner before
+                # TemporaryDirectory removes it; never relax production modes.
+                run('docker', 'exec', name, 'chown', '-Rh', f'{os.getuid()}:{os.getgid()}', '/state', check=False, stdout=subprocess.DEVNULL)
                 run('docker', 'rm', '-f', name, check=False, stdout=subprocess.DEVNULL)
 
 

@@ -44,6 +44,8 @@ def main():
             if result.returncode:
                 print(result.stderr)
                 print(run('docker', 'logs', name + '-kam', check=False).stderr[-5000:])
+                logs = run('docker', 'logs', name, check=False)
+                print(logs.stdout[-7000:] + logs.stderr[-7000:])
                 raise RuntimeError('Credential boundary regression failed')
             print(result.stdout.strip())
         finally:
