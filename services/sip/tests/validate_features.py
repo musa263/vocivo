@@ -78,6 +78,9 @@ def main():
             while '0 total.' not in fs('show channels count'):
                 assert time.monotonic() < deadline, 'Loopback channels did not terminate'
                 time.sleep(.2)
+            # The production umask keeps recordings private (0600). Transfer
+            # this isolated fixture to the runner for inspection on Linux.
+            run('exec', name, 'chown', f'{os.getuid()}:{os.getgid()}', '/state/fixture.wav')
             with wave.open(str(root / 'fixture.wav'), 'rb') as recording:
                 frames = recording.readframes(recording.getnframes())
                 assert recording.getnframes() > 1000 and any(frames), 'No generated audio in recording'
