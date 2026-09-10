@@ -236,9 +236,12 @@ jobs:
           npx --yes vercel@latest pull --yes --environment production --token "$VERCEL_TOKEN" >/dev/null
           url=$(npx --yes vercel@latest deploy --prod --yes --env "VOCIVO_RELEASE_SHA=$GITHUB_SHA" --token "$VERCEL_TOKEN" | tail -n 1)
           echo "deployed: $url"
+          # The generated deployment URL may require Vercel SSO. Verify the
+          # customer-facing production alias, including this exact commit, so
+          # a redirect or an older healthy release cannot pass the gate.
           for attempt in 1 2 3 4 5 6; do
-            if curl --fail --silent --max-time 10 "${url%/}/api/health?deep=1" -o /tmp/release-health.json &&
-              node -e 'const h=require("/tmp/release-health.json");process.exit(h.ok===true && h.storage?.status==="available" && h.revision===process.env.GITHUB_SHA ? 0 : 1)'; then
+            if curl --fail --silent --max-time 10 "https://vocivo.app/api/health?deep=1" -o /tmp/release-health.json &&
+              node -e 'try { const h=require("/tmp/release-health.json"); process.exit(h.ok===true && h.storage?.status==="available" && h.revision===process.env.GITHUB_SHA ? 0 : 1); } catch { console.error("Health endpoint did not return valid JSON"); process.exit(1); }'; then
               echo "health: API, PostgreSQL and release revision verified"; exit 0
             fi
             sleep $((attempt * 5))
