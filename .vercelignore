@@ -15,3 +15,9 @@ frontend/dist/
 frontend/node_modules/
 frontend/credentials.json
 frontend/credentials/
+
+# Tests and operator scripts are source validation tools, not app runtime.
+frontend/scripts/
+frontend/api/**/*.test.ts
+frontend/src/**/*.test.js
+frontend/src/**/*.test.ts

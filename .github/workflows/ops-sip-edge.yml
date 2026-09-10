@@ -376,7 +376,7 @@ jobs:
               # which ended the shell before the tar below ever ran — so on a
               # droplet with nothing at /opt/vocivo/sip yet, the very first
               # sync silently staged nothing at all.
-              tar czf - -C services sip | ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 "$SSH_USER@$HOST" \
+              tar --exclude=sip/tests --exclude=sip/freeswitch/image --exclude=sip/.env.example -czf - -C services sip | ssh -i ~/.ssh/ops_key -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 "$SSH_USER@$HOST" \
                 'set -e; install -d -m 755 /opt/vocivo/sip-backups; ts=$(date +%Y%m%d%H%M%S); if [ -d /opt/vocivo/sip ]; then cp -a /opt/vocivo/sip "/opt/vocivo/sip-backups/$ts"; echo "backed up to /opt/vocivo/sip-backups/$ts"; else echo "no /opt/vocivo/sip to back up; this is a first deployment"; fi; rm -rf /opt/vocivo-stage; install -d /opt/vocivo-stage; tar xzf - -C /opt/vocivo-stage'
               remote="$remote"'
               set -e
