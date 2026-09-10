@@ -90,6 +90,19 @@ window. In-dialog messages follow tracked routes instead of requesting a new
 one-use call grant. Unauthorised conference/REFER entry is rejected; this SIP
 release does not advertise conference admission as available.
 
+Once a trusted PBX leg reaches a registered device, its edge transaction budget
+allows the PBX's configured ringing duration, up to 120 seconds. Unknown dialogs
+fail closed; drain calls before replacing a non-persistent Kamailio instance.
+Media conversion must succeed before forwarding SDP. The core reply hook checks
+answers before Kamailio's transaction layer can relay a final success response.
+
+FreeSWITCH hangup hooks persist private jobs, and failed JSON CDRs and voicemail
+uploads remain on named volumes. The separate `sip-outbox` worker retries these
+HTTPS deliveries using the existing idempotent API contracts. Its signed
+voicemail renewal remains bound to the original tenant and call. First deployment
+requires preserving any existing container-local spool and recordings; volume
+creation alone does not migrate that data. See `services/sip/README.md`.
+
 On the managed edge, `calling/routes/voice-webhook.ts` coordinates parked and
 destination Telnyx legs through the call stores. The stores arbitrate destination
 winners and cancellation. Those files are not the SIP.js transport implementation.
@@ -129,3 +142,7 @@ deployment records bind a gateway and real edge IP; signed outbound grants and
 the XML bridge prevent fallback to another carrier. Configuration, publication,
 deployment and real call acceptance are separate states. See the
 [tenant carrier runbook](docs/runbooks/tenant-carrier-trunks.md).
+Editing a published trunk updates its encrypted connection record and company
+number inventory atomically. Disabled number tombstones remain disabled. Managed
+carrier DID lookup additionally requires its own explicit source IP/CIDR allowlist;
+a different tenant's BYOC carrier source cannot authorize managed fallback.

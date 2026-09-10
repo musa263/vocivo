@@ -28,7 +28,7 @@ export function carrierNumberInventory(trunks: CarrierTrunk[]) {
     carrier_trunk_id: trunk.id,
     carrier_trunk_revision: trunk.revision,
     status: carrierReadiness(trunk).status,
-    receives_calls: carrierReadiness(trunk).status === 'ready' && trunk.inboundEnabled === true && number.destinationType !== 'unassigned',
+    receives_calls: Boolean(carrierReadiness(trunk).deployment?.inboundSources.length) && trunk.inboundEnabled === true && number.destinationType !== 'unassigned',
     messaging_enabled: false,
     destination_type: number.destinationType,
     destination_id: number.destinationId,
@@ -57,7 +57,7 @@ export function applyCarrierNumbers(config: PbxConfig, organizationId: string, t
       carrierTrunkRevision: trunk.revision, inboundNumber: number.inboundNumber,
       carrierConnectionRevision: trunk.connectionRevision || trunk.revision,
       label: `${trunk.name}${trunk.mainNumber === number.inboundNumber ? ' main line' : ''}`,
-      disabled: false, messagingEnabled: false,
+      disabled: current?.disabled === true, messagingEnabled: false,
       ...(current ? { destinationType: current.destinationType, destinationId: current.destinationId } : number.destinationType === 'unassigned' ? {} : {
         destinationType: number.destinationType, destinationId: number.destinationId,
       }),
@@ -68,7 +68,7 @@ export function applyCarrierNumbers(config: PbxConfig, organizationId: string, t
   const existing = assignments[tenant.company.defaultCallerId];
   const company = { ...tenant.company, callingMode: 'carrier' as const,
     defaultCallerId: existing?.organizationId === organizationId && existing.source === 'carrier' && !existing.disabled
-      ? tenant.company.defaultCallerId : main?.callerId || trunk.numbers[0]?.callerId || '' };
+      ? tenant.company.defaultCallerId : [main, ...trunk.numbers].find(number => number && !assignments[number.callerId]?.disabled)?.callerId || '' };
   return {
     numberAssignments: assignments,
     ...(legacyPrimaryOrganizationId(config) === organizationId ? { company } : {}),
@@ -102,18 +102,16 @@ export function detachCompanyNumber(config: PbxConfig, organizationId: string, p
   };
 }
 
-export async function useCarrierNumbers(organizationId: string, id: string, revision: number, limit = 10000) {
-  const trunk = (await carrierTrunks.list(organizationId)).find(item => item.id === id);
-  if (!trunk) throw new CarrierTrunkError(404, 'Carrier trunk not found.');
-  if (trunk.revision !== revision) throw new CarrierTrunkError(409, 'The trunk changed. Reload before selecting its numbers.');
+export function publishCarrierNumbers(config: PbxConfig, organizationId: string, trunk: CarrierTrunk, limit: number) {
   if (!trunk.numbers.length) throw new CarrierTrunkError(400, 'Add the carrier DID numbers first.');
-  await savePbxConfig(current => {
-    const patch = applyCarrierNumbers(current, organizationId, trunk);
-    const count = Object.values(patch.numberAssignments).filter(item => item.organizationId === organizationId && !item.disabled && item.source === 'carrier').length;
-    if (count > limit) throw new CarrierTrunkError(409, `This company plan allows ${limit} phone numbers.`);
-    return patch;
-  });
-  return trunk;
+  const patch = applyCarrierNumbers(config, organizationId, trunk);
+  const count = Object.values(patch.numberAssignments).filter(item => item.organizationId === organizationId && !item.disabled && item.source === 'carrier').length;
+  if (count > limit) throw new CarrierTrunkError(409, `This company plan allows ${limit} phone numbers.`);
+  return patch;
+}
+
+export async function useCarrierNumbers(organizationId: string, id: string, revision: number, limit = 10000) {
+  return carrierTrunks.publish(organizationId, id, revision, (config, trunk) => publishCarrierNumbers(config, organizationId, trunk, limit));
 }
 
 export async function removeCompanyNumber(organizationId: string, phoneNumber: string) {

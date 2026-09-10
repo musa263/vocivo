@@ -277,7 +277,8 @@ jobs:
               echo "--- calls now ---"; docker compose exec -T freeswitch fs_cli -x "show calls count" 2>/dev/null || true
               echo "--- freeswitch log levels (core / console) ---"
               # Never "fsctl loglevel" with no argument: it passes -1 and DISABLES the core log.
-              docker compose exec -T freeswitch fs_cli -x "fsctl loglevel debug" 2>/dev/null || true
+              # Diagnostics must not change the core verbosity.
+              echo "Core log level left unchanged."
               docker compose exec -T freeswitch fs_cli -x "console loglevel" 2>/dev/null || true
               docker compose exec -T freeswitch fs_cli -x "module_exists mod_console" 2>/dev/null || true
               docker compose exec -T freeswitch fs_cli -x "module_exists mod_logfile" 2>/dev/null || true

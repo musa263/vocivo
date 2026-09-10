@@ -120,3 +120,18 @@ test('the office-hours decision is taken in the tenant’s own timezone', async 
   const closed = await withSipInbound(() => lookupSipInbound('+15551212', config, new Date('2026-09-07T20:00:00Z'), directory(staff)));
   assert.equal(closed.action, 'closed');
 });
+
+test('legacy fallback cannot broaden explicit destinations or override them with AI', async () => {
+  const config = openAllHours(assigned(defaultPbxConfig()));
+  config.ai.enabled = true;
+  for (const destinationType of ['ring_group', 'queue', 'ivr'] as const) {
+    config.numberAssignments['+15551212'] = { organizationId: 'primary', destinationType, destinationId: 'group' };
+    const result = await withSipInbound(() => lookupSipInbound('+15551212', config, testTime, directory(staff)));
+    assert.equal(result.enabled, false);
+    assert.equal(result.bridge, '');
+  }
+  config.numberAssignments['+15551212'] = { organizationId: 'primary', destinationType: 'extension', destinationId: 'u1' };
+  const result = await withSipInbound(() => lookupSipInbound('+15551212', config, testTime, directory([...staff, extension({ id: 'foreign', organizationId: 'other', sipUsername: 'foreign' })])));
+  assert.equal(result.action, 'bridge');
+  assert.deepEqual(result.usernames, ['sam-1001']);
+});

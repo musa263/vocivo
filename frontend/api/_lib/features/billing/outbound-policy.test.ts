@@ -26,3 +26,7 @@ test('matches extension range, number length and department', () => {
   assert.equal(authorizeOutboundCall(config, { extension: '2002', department: 'Sales', internationalAllowed: true }, '+966535548337', '+18447161777').id, 'sales');
   assert.throws(() => authorizeOutboundCall(config, { extension: '2021', department: 'Sales', internationalAllowed: true }, '+966535548337', '+18447161777'), /No enabled outbound rule/);
 });
+
+test('unknown numbering regions cannot bypass disabled international permission', () => {
+  assert.throws(() => authorizeOutboundCall(defaultPbxConfig(), { extension: '2001', internationalAllowed: false }, '+442079460018', '+15551230000'), /International calling is disabled/);
+});

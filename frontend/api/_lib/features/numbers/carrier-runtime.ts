@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { isIP } from 'node:net';
+import { BlockList, isIP } from 'node:net';
 import { carrierTrunks, CarrierTrunkError, type CarrierTrunk } from './carrier-trunk-store.js';
 import { pbxForOrganization, type PbxConfig } from '../organizations/pbx-config-store.js';
 
@@ -62,13 +62,28 @@ export async function resolveCarrierOutbound(config: PbxConfig, organizationId: 
   return { trunkId: trunk.id, revision: trunk.revision, gateway: readiness.deployment.gateway, channelLimit: trunk.channelLimit };
 }
 
+/** Managed provider sources are separate from tenant BYOC deployment sources. */
+export function managedCarrierSourceAllowed(sourceIp: string, raw = process.env.VOCIVO_MANAGED_TRUNK_SOURCES || '') {
+  if (isIP(sourceIp) !== 4) return false;
+  const allowed = new BlockList();
+  for (const source of raw.split(/[\s,]+/).filter(Boolean)) {
+    const [address, prefix, extra] = source.split('/');
+    if (isIP(address) !== 4 || extra !== undefined || prefix !== undefined && !/^(?:[0-9]|[12][0-9]|3[0-2])$/.test(prefix)) {
+      throw new Error('Invalid managed carrier source configuration.');
+    }
+    if (prefix === undefined) allowed.addAddress(address, 'ipv4');
+    else allowed.addSubnet(address, Number(prefix), 'ipv4');
+  }
+  return allowed.check(sourceIp, 'ipv4');
+}
+
 /** National DID aliases are considered only within the admitted carrier source. */
 export function resolveInboundNumber(config: PbxConfig, supplied: string, sourceIp: string, deployments = carrierDeployments()) {
   const digits = supplied.replace(/^\+/, '');
   if (!/^\d{5,15}$/.test(digits)) return '';
   const matches = Object.entries(config.numberAssignments).filter(([did, assignment]) => {
     if (assignment.disabled || !assignment.organizationId) return false;
-    if (assignment.source !== 'carrier') return did === `+${digits}`;
+    if (assignment.source !== 'carrier') return assignment.source !== 'verified' && did === `+${digits}` && managedCarrierSourceAllowed(sourceIp);
     if (!assignment.destinationType || (did !== `+${digits}` && assignment.inboundNumber !== digits)) return false;
     return deployments.some(item => !deploymentExpired(item) && item.organizationId === assignment.organizationId && item.trunkId === assignment.carrierTrunkId
       && item.revision === (assignment.carrierConnectionRevision || assignment.carrierTrunkRevision) && item.inboundSources.includes(sourceIp));

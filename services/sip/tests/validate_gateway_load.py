@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise generated gateway includes with production FreeSWITCH startup, offline."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -10,6 +11,7 @@ import xml.etree.ElementTree as ET
 
 from relay_operations import gateway_xml
 from temporary_carrier_pbx import IMAGE
+IMAGE = os.environ.get('VOCIVO_TEST_FS_IMAGE', IMAGE)
 
 
 def run(*args, check=True):
@@ -33,9 +35,15 @@ def main():
         def fs(command):
             return run('docker', 'exec', name, 'fs_cli', '-x', command).stdout
 
-        time.sleep(12)
-        if 'is ready' not in fs('status') or 'trunk' not in fs('sofia status'):
-            raise RuntimeError('Production fixture did not start')
+        deadline = time.monotonic() + 90
+        while 'is ready' not in run('docker', 'exec', name, 'fs_cli', '-x', 'status', check=False).stdout:
+            if time.monotonic() >= deadline:
+                logs = run('docker', 'logs', name, check=False)
+                print(logs.stdout[-6000:] + logs.stderr[-6000:])
+                raise RuntimeError('Production fixture did not start')
+            time.sleep(2)
+        if 'trunk' not in fs('sofia status'):
+            raise RuntimeError('Trunk profile did not start')
         with tempfile.TemporaryDirectory(prefix='vocivo-gateway-include-') as directory:
             path = Path(directory) / 'gateway.xml'
 

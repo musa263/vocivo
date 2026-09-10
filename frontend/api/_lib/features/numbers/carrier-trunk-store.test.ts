@@ -1,9 +1,10 @@
+import { publishCarrierNumbers } from './carrier-number-service.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import type { VocivoSession } from '../auth/auth.js';
-import { defaultPbxConfig } from '../organizations/pbx-config-store.js';
+import { defaultPbxConfig, pbxConfigStorage } from '../organizations/pbx-config-store.js';
 import { createCarrierTrunkStore, normalizeCarrierTrunk } from './carrier-trunk-store.js';
 import { createCarrierTrunksHandler } from './routes/admin-carrier-trunks.js';
 
@@ -15,6 +16,16 @@ function memoryStore() {
   let queue = Promise.resolve();
   const deps: Parameters<typeof createCarrierTrunkStore>[0] = {
     readObject: async path => objects.get(path) || null,
+    transactObjectGroup: async (_lock, paths, update) => {
+      const task = queue.then(async () => {
+        const current = new Map(paths.filter(path => objects.has(path)).map(path => [path, { body: objects.get(path)!, etag: 'fixture' }]));
+        const mutation = await update(current);
+        for (const entry of mutation.puts || []) objects.set(entry.pathname, entry.value as Buffer);
+        return mutation.result;
+      });
+      queue = task.then(() => {}, () => {});
+      return task;
+    },
     transactObject: async (path, update) => {
       const task = queue.then(async () => { objects.set(path, await update(objects.get(path) || null)); });
       queue = task.catch(() => {}); // Rejected writes must release the test lock.
@@ -168,4 +179,21 @@ test('carrier API requires explicit platform workspace and rejects another compa
     assert.equal((await request('PUT', body, 'second')).status, 400);
     assert.equal((await request('PUT', body, 'primary')).status, 200);
   }
+});
+
+
+test('trunk edits and publication commit together; failed number limits preserve the old revision', async () => {
+  const { store, objects } = memoryStore();
+  const input = draft();
+  await store.save('primary', input);
+  const publish = (config: ReturnType<typeof defaultPbxConfig>, trunk: Awaited<ReturnType<typeof store.save>>) => publishCarrierNumbers(config, 'primary', trunk, 1);
+  await store.publish('primary', input.id, 1, publish);
+  const before = Buffer.from(objects.get(pbxConfigStorage.pathname)!);
+  await assert.rejects(store.save('primary', { ...input, revision: 1, numbers: [...input.numbers, { ...input.numbers[0], inboundNumber: '0123456790', callerId: '44123456790' }] }, publish), /allows 1 phone numbers/);
+  assert.equal((await store.list('primary'))[0].revision, 1);
+  assert.deepEqual(objects.get(pbxConfigStorage.pathname), before);
+  await store.save('primary', { ...input, revision: 1, name: 'Updated' }, publish);
+  assert.equal((await store.list('primary'))[0].revision, 2);
+  assert.equal(pbxConfigStorage.read(objects.get(pbxConfigStorage.pathname)!).numberAssignments['+44123456789'].carrierTrunkRevision, 2);
+  await assert.rejects(store.publish('primary', input.id, 1, publish), /trunk changed/);
 });

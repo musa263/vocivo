@@ -164,11 +164,16 @@ not physical Wi-Fi/5G handoff, killed-state operation, or two-way carrier audio.
 
 A Registerer `Unregistered` event precedes SIP.js's rejection callback and also
 occurs for expiry and server failures. While registration is wanted it starts
-recovery; a final 401/403 still reports refusal. Temporary 408/429/5xx responses
-keep established media alive during the existing 45-second recovery grace.
+recovery. Final 401/403 responses request fresh HTTPS credentials, including
+during an active call, through the existing single-flight bootstrap and in-place
+same-identity credential update. They and temporary 408/429/5xx responses keep
+established media alive during the existing 45-second recovery grace.
 Repeated failures cannot extend that deadline; successful registration clears
 it. Keeper tests cover callback ordering and mounted-provider tests cover media
 survival, recovery and bounded cleanup. These changes require a mobile build.
+Explicit sign-out/session revocation still tears down voice. A SIP refusal alone
+does not prove the HTTP account was revoked; unsuccessful renewal cannot extend
+the media recovery deadline indefinitely.
 
 APNs routing follows the signed iOS provisioning profile, exposed through
 `VocivoSip.pushEnvironment`. Release JavaScript does not imply production APNs:

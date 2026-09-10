@@ -1,3 +1,4 @@
+import { authorizeOutboundCall } from '../billing/outbound-policy.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { BusinessVoiceConfig } from '../numbers/number-config.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../organizations/office-hours.js';
@@ -285,7 +286,20 @@ function contact(extension: ExtensionUser) {
   return `sofia/external/${extension.sipUsername}@${kamailioLoopback}`;
 }
 
-function trunkLeg(input: SipDialplanInput, destination: string) {
+function trunkLeg(input: SipDialplanInput, destination: string, extension: ExtensionUser | undefined) {
+  if (!extension || extension.organizationId !== input.organizationId || extension.status !== 'active'
+    || !e164.test(destination) || !e164.test(input.did) || input.trunkGateway === 'byoc_unavailable') return '';
+  try {
+    authorizeOutboundCall(input.pbx, {
+      extension: extension.extension,
+      department: extension.department,
+      internationalAllowed: input.pbx.userProfiles[extension.id]?.permissions?.international !== false,
+    }, destination, input.did);
+  } catch {
+    // A denied forwarding leg follows the existing voicemail/receptionist
+    // fallback; it cannot bypass policy or prevent the local extension ringing.
+    return '';
+  }
   const callerId = e164.test(input.did) ? input.did : '';
   const variables = callerId
     ? `{origination_caller_id_number=${callerId},origination_caller_id_name=Vocivo,sip_cid_type=pid${input.trunkGateway === 'telnyx' ? `,nolocal:sip_h_P-Asserted-Identity=<sip:${callerId}@sip.telnyx.com>` : ''}}`
@@ -391,7 +405,8 @@ function ringExtensionActions(input: SipDialplanInput, extension: ExtensionUser,
     legs.push(contact(simultaneousExtension));
   } else if (simultaneous) {
     const simultaneousNumber = normalizeE164(simultaneous);
-    if (e164.test(simultaneousNumber) && e164.test(input.did)) legs.push(trunkLeg(input, simultaneousNumber));
+    const leg = trunkLeg(input, simultaneousNumber, extension);
+    if (leg) legs.push(leg);
   }
   return [
     ...bridgeActions(input, legs, userNoAnswerSeconds(profile, input.business.voicemailDelaySeconds), { announceWaiting: options.announceWaiting }),
@@ -711,7 +726,7 @@ function configuredIvrSelectActions(input: SipDialplanInput) {
 
 function afterRingActions(input: SipDialplanInput) {
   const request = input.request;
-  const extension = input.extensions.find((item) => item.id === request.arg);
+  const extension = activeExtensions(input).find((item) => item.id === request.arg);
   const profile = extension ? input.pbx.userProfiles[extension.id] : undefined;
   const voicemailEnabled = userVoicemailEnabled(profile, input.business.voicemailEnabled);
   const target = forwardingTargetForCause(profile, fsCauseToVocivo(request.disposition));
@@ -721,9 +736,10 @@ function afterRingActions(input: SipDialplanInput) {
   const forwardExtension = activeExtensions(input).find((item) => item.extension === target.replace(/\D/g, '') && item.id !== extension?.id && !visited.includes(item.id));
   if (forwardExtension) return ringExtensionActions(input, forwardExtension, { announceWaiting: false, depth: request.depth + 1, visited });
   const destination = normalizeE164(target);
-  if (e164.test(destination) && e164.test(input.did)) {
+  const leg = trunkLeg(input, destination, extension);
+  if (leg) {
     return [
-      ...bridgeActions(input, [trunkLeg(input, destination)], 45, { announceWaiting: false }),
+      ...bridgeActions(input, [leg], 45, { announceWaiting: false }),
       ...transferToStage('unavailable', { arg: voicemailEnabled ? 'user' : 'none' }),
     ];
   }

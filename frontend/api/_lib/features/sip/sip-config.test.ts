@@ -10,14 +10,14 @@ test('public SIP extension lookup and push require an allowlisted trunk source',
   const end = config.indexOf('# Wake the iPhone, then fork', start);
   assert.ok(start > -1 && end > start);
   const publicIngress = config.slice(start, end);
-  assert.match(publicIngress, /route\(TRUNK_SOURCE\);\s*if \(\$var\(from_trunk\) != 1\) \{\s*sl_send_reply\("403", "Forbidden"\);\s*exit;\s*\}/);
+  assert.match(publicIngress, /route\(TRUNK_SOURCE\);\s*if \(\$var\(from_trunk\) != 1 \|\| \$env\(VOCIVO_SIP_INBOUND\) != "1"\) \{\s*sl_send_reply\("403", "Forbidden"\);\s*exit;\s*\}/);
   const guard = publicIngress.indexOf('route(TRUNK_SOURCE)');
   assert.ok(guard < publicIngress.indexOf('route(DELIVER_EXTENSION)'));
 });
 
 test('late REGISTER appends to a bounded transaction, never an eight-second poll', () => {
   const config = readFileSync(new URL('../../../../../services/sip/kamailio/kamailio.cfg', import.meta.url), 'utf8');
-  assert.match(config, /ts_append_by_contact\("location", "\$tu"\)/);
+  assert.match(config, /ts_append_by_contact\("location", "\$var\(reg_aor\)"\)/);
   const delivery = config.slice(config.indexOf('route[DELIVER_EXTENSION]'), config.indexOf('route[CDR_ENQUEUE]'));
   assert.match(delivery, /t_set_max_lifetime\(45000, 45000\)/);
   assert.match(delivery, /if \(lookup\("location"\)\) \{\s*route\(DELIVER_REGISTERED\);/);
@@ -33,15 +33,14 @@ test('WebRTC media uses supported RTCP multiplexing flags on offers and answers'
   const config = readFileSync(new URL('../../../../../services/sip/kamailio/kamailio.cfg', import.meta.url), 'utf8');
   assert.doesNotMatch(config, /RTCP-MUX/);
   const webRtcRules = config.split('\n').filter(line => line.includes('ICE=force'));
-  assert.equal(webRtcRules.length, 3);
+  assert.equal(webRtcRules.length, 1);
   for (const rule of webRtcRules) assert.match(rule, /rtcp-mux-offer rtcp-mux-require UDP\/TLS\/RTP\/SAVPF/);
 });
 
 test('known dialog routing precedes initial INVITE and conferences fail closed', () => {
   const config = readFileSync(new URL('../../../../../services/sip/kamailio/kamailio.cfg', import.meta.url), 'utf8');
   assert.ok(config.indexOf('if (has_totag())') < config.indexOf('route(INVITE)'));
-  // A dialog the proxy does not remember still gets its ACK and BYE relayed
-  // (refusing them left both sides on a dead call); only other methods 481.
+  // Unknown dialogs fail closed; existing calls must be drained at rollout.
   assert.match(config, /if \(!loose_route\(\)\)/);
   assert.match(config, /if \(!is_known_dlg\(\)\)/);
   assert.match(config, /if \(\$rp == "5080"\)/);

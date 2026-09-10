@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import wave
 from uuid import uuid4
 from pathlib import Path
 
-from .api import VocivoApi
+from .api import VocivoApi, ReceptionistUnavailable
 from .brain import Assistant, Brain, Conversation, Decision
 from .config import Settings
 from .esl import EslConnection, EslProtocolError, channel_variable
@@ -56,7 +57,20 @@ class CallHandler:
         dialled = channel_variable(channel, "Caller-Destination-Number", "destination_number", "sip_to_user")
         log.info("call %s received", call_id[:8])
 
-        assistant = await self._api.assistant_for(dialled, caller)
+        try:
+            assistant = await self._api.assistant_for(dialled, caller)
+        except ReceptionistUnavailable:
+            # Only a call already assigned by the PBX can return to its
+            # unavailable stage. Never invent a tenant or transfer target.
+            organization = channel_variable(channel, "variable_vocivo_org", "vocivo_org")
+            did = channel_variable(channel, "variable_vocivo_did", "vocivo_did")
+            if organization and re.fullmatch(r"\+?[0-9]{5,15}", did):
+                await connection.set("vocivo_from_receptionist", "0")
+                await connection.set("vocivo_stage", "unavailable")
+                await connection.execute("transfer", f"{did} XML public")
+            else:
+                await connection.hangup("NORMAL_TEMPORARY_FAILURE")
+            return
         if assistant is None:
             log.warning("call %s has no receptionist; releasing the call", call_id[:8])
             await connection.hangup("NO_ROUTE_DESTINATION")
@@ -447,6 +461,10 @@ class CallHandler:
             try:
                 if not connection.hungup.is_set():
                     await asyncio.wait_for(connection.api(f"uuid_record {connection.uuid} stop {path}"), 5)
+            except Exception as error:
+                # Cleanup must not replace a speech/model failure and suppress
+                # its tenant-approved fallback. Cancellation still propagates.
+                log.warning("interruption recorder cleanup failed (%s)", type(error).__name__)
             finally:
                 self._discard(path)
 

@@ -113,3 +113,26 @@ carrier socket. Imported national DIDs resolve only within the source-bound
 deployment and published assignment; disabled or unassigned DIDs do not answer.
 Company destinations remain in the existing API-rendered inbound dialplan.
 See the [BYOC rollout and acceptance gates](../../../../../docs/runbooks/tenant-carrier-trunks.md).
+
+## September 2026 repair contracts
+
+Call-record ingestion rejects conflicting tenant evidence. Kamailio route tokens
+are accepted only on the initial event, with matching participants; subsequent
+events use their Call-ID and parties. External simultaneous-ring and forwarding
+legs invoke the shared outbound policy for the owning extension. Denial omits
+that external leg and preserves the normal local ringing or unavailable fallback.
+An unavailable BYOC gateway cannot select a platform carrier.
+
+The legacy managed-DID lookup rejects ring-group, queue and IVR destinations when
+the full XML plan is unavailable. It does not broaden membership or let a global
+AI setting override an explicit extension. Both normal and fallback HTTP routes
+require a provider-specific source match for managed DIDs. BYOC remains tied to
+the deployed tenant gateway and published number.
+
+FreeSWITCH callbacks are delivered by the durable `sip-outbox` service. See
+`services/sip/README.md` for first-deployment data migration and coordinated edge
+rollout. Core reply routing now handles failed SDP before final 200 responses can
+escape; this needs the wire tests, not only the structural TypeScript guard.
+Outbound hook UUID and billable seconds are deferred through both application
+expansion passes until hangup. The Docker BYOC fixture verifies a positive final
+duration for an answered call, not merely the presence of a hook in XML.

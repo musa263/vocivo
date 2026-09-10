@@ -18,8 +18,8 @@ export type RegistrationKeeperDeps = {
   isRegistered: () => boolean;
   /**
    * Reports a state the UI should show: `Reconnecting` while the socket is
-   * being brought back (calls stay up), `Unregistered` when the registrar
-   * refused us or a REGISTER could not be sent.
+   * being brought back or credentials are renewing (bounded media grace),
+   * `Unregistered` for a non-recoverable registrar refusal.
    */
   notify: (state: 'Unregistered' | 'Reconnecting', reason: string) => void;
   schedule?: (callback: () => void, delayMs: number) => unknown;
@@ -89,7 +89,7 @@ export function createRegistrationKeeper(deps: RegistrationKeeperDeps) {
     } catch (error) {
       if (wanted && current === generation && !isPending(error)) {
         needsRegistration = true;
-        deps.notify(deps.isConnected() ? 'Unregistered' : 'Reconnecting', `${why}: ${describe(error)}`);
+        deps.notify('Reconnecting', `${why}: ${describe(error)}`);
       }
     } finally {
       running = false;
@@ -108,15 +108,15 @@ export function createRegistrationKeeper(deps: RegistrationKeeperDeps) {
       if (!wanted) return;
       needsRegistration = true;
       // SIP.js emits Unregistered before its final-response delegate. It can
-      // mean expiry or a temporary 5xx, so wait for that delegate to report a
-      // permanent refusal before allowing the UI to tear down an active call.
+      // mean expiry or a temporary failure. Credential refusals also get the
+      // bounded grace while HTTPS renewal establishes whether access is valid.
       deps.notify('Reconnecting', 'registration is being renewed');
       scheduleRetry();
     },
     onRejected: (status: number, reason: string) => {
       if (!wanted) return;
       needsRegistration = true;
-      const temporary = status === 408 || status === 429 || status >= 500;
+      const temporary = status === 401 || status === 403 || status === 408 || status === 429 || status >= 500;
       deps.notify(temporary || !deps.isConnected() ? 'Reconnecting' : 'Unregistered', `${status} ${reason}`);
       scheduleRetry();
     },

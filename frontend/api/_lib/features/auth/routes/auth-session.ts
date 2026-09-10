@@ -1,11 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { errors } from 'jose';
 import { clearSessionCookies, requireSession } from '../auth.js';
 import { allowMobile, methodNotAllowed } from '../../../shared/http.js';
 import { readPbxConfig } from '../../organizations/pbx-config-store.js';
 import { effectiveEntitlements, readTenantSaasState } from '../../organizations/saas-store.js';
 import { VOCIVO_PLATFORM_NAME, VOCIVO_SUPERADMIN_NAME } from '../../organizations/platform-identity.js';
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export function createAuthSessionHandler(deps = { requireSession, readPbxConfig, readTenantSaasState }) {
+return async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;
   if (req.method === 'DELETE') {
     // Logout: clearing cookies needs no valid session and must always succeed.
@@ -14,11 +16,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   if (req.method !== 'GET') return methodNotAllowed(res, ['GET', 'DELETE']);
   try {
-    const session = await requireSession(req);
+    const session = await deps.requireSession(req);
     const isOwner = session.sub === 'vocivo-owner';
-    const config = await readPbxConfig();
+    const config = await deps.readPbxConfig();
     const organization = session.organizationId ? config.organizations.find((item) => item.id === session.organizationId) : undefined;
-    const access = organization ? effectiveEntitlements(await readTenantSaasState(organization.id, config), organization.id, organization.accountType) : undefined;
+    const access = organization ? effectiveEntitlements(await deps.readTenantSaasState(organization.id, config), organization.id, organization.accountType) : undefined;
     return res.status(200).json({
       profile: {
         id: session.sub,
@@ -37,7 +39,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         subscription: access ? { plan: access.plan.name, status: access.subscription.status, renews_at: access.subscription.renewsAt } : undefined,
       },
     });
-  } catch {
-    return res.status(401).json({ error: 'Session expired.' });
+  } catch (error) {
+    // These are the explicit rejection contracts of requireSession and JOSE.
+    // Storage/configuration failures must not masquerade as session revocation.
+    const rejected = error instanceof Error && error.message === 'Unauthorized'
+      || error instanceof errors.JWTExpired || error instanceof errors.JWTClaimValidationFailed
+      || error instanceof errors.JWSSignatureVerificationFailed || error instanceof errors.JWSInvalid
+      || error instanceof errors.JWTInvalid;
+    if (rejected) return res.status(401).json({ error: 'Session expired.' });
+    res.setHeader('Retry-After', '5');
+    return res.status(503).json({ error: 'Session verification is temporarily unavailable. Please retry.' });
   }
+};
 }
+
+export default createAuthSessionHandler();

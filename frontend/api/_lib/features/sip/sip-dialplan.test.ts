@@ -322,7 +322,7 @@ test('simultaneous ring adds the second extension, or a trunk leg carrying the D
   assert.equal(list.find((item) => item.app === 'bridge')?.data, 'sofia/external/alice@127.0.0.1:5060:_:sofia/external/bob@127.0.0.1:5060');
   assert.ok(list.some((item) => item.data === 'call_timeout=40'), 'user no-answer seconds win');
 
-  const withMobile = pbx({ numberAssignments: { [did]: { organizationId: 'acme', destinationType: 'extension', destinationId: 'e1' } }, userProfiles: { e1: { ...profile, simultaneousRing: '+15550009999' } } });
+  const withMobile = pbx({ numberAssignments: { [did]: { organizationId: 'acme', destinationType: 'extension', destinationId: 'e1' } }, userProfiles: { e1: { ...profile, permissions: { ...profile.permissions, international: true }, simultaneousRing: '+15550009999' } } });
   list = actions(renderSipDialplan(input({ pbx: withMobile })));
   const bridge = list.find((item) => item.app === 'bridge')!.data;
   assert.match(bridge, /^sofia\/external\/alice@127\.0\.0\.1:5060:_:\{origination_caller_id_number=\+15551230000,/);
@@ -455,6 +455,7 @@ test('after an unanswered ring the user profile decides: forward, trunk, or voic
   const busy = actions(renderSipDialplan(input({ pbx: config, request: request({ stage: 'after-ring', arg: 'e1', disposition: 'USER_BUSY' }) })));
   assert.ok(busy.some((item) => item.app === 'record'), 'busy → voicemail');
 
+  profile.permissions.international = true;
   const unavailable = actions(renderSipDialplan(input({ pbx: config, request: request({ stage: 'after-ring', arg: 'e1', disposition: 'NORMAL_TEMPORARY_FAILURE' }) })));
   const trunk = unavailable.find((item) => item.app === 'bridge')?.data || '';
   assert.match(trunk, /^\{origination_caller_id_number=\+15551230000,.*\}sofia\/gateway\/telnyx\/\+15550007777$/);
@@ -535,4 +536,19 @@ test('a caller waiting for a person hears hold music, and a failed transfer from
   // Without the receptionist flag the old path stands.
   const plain = renderSipDialplan(input({ pbx: withAi, request: request({ stage: 'after-ring', arg: 'e1', disposition: 'NO_ANSWER' }) }));
   assert.doesNotMatch(plain, /vocivo_transfer_failed/);
+});
+
+test('external simultaneous ring and forwarding enforce the same outbound policy as app calls', () => {
+  for (const stage of ['', 'after-ring']) {
+    const config = pbx();
+    config.numberAssignments[did].destinationType = 'extension';
+    config.numberAssignments[did].destinationId = alice.id;
+    config.userProfiles[alice.id] = { simultaneousRing: '+442079460018', forwardNoAnswer: '+442079460018', permissions: { international: false } } as never;
+    const args = { pbx: config, trunkGateway: 'byoc_fixture', request: request({ stage, arg: alice.id, disposition: 'NO_ANSWER' }) };
+    assert.doesNotMatch(renderSipDialplan(input(args)), /sofia\/gateway\//);
+    config.userProfiles[alice.id].permissions.international = true;
+    assert.match(renderSipDialplan(input(args)), /sofia\/gateway\/byoc_fixture\/\+442079460018/);
+    config.outboundRules = [];
+    assert.doesNotMatch(renderSipDialplan(input(args)), /sofia\/gateway\//);
+  }
 });

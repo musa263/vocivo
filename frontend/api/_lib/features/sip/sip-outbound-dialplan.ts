@@ -6,6 +6,9 @@ import { type XmlCurlRequest } from './sip-dialplan.js';
 
 const xml = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 const action = (app: string, value: string) => `<action application="${app}" data="${xml(value)}"/>`;
+// Both the session executor and mod_dptools set expand variables. Preserve
+// the reference through both passes so the hangup hook sees final timestamps.
+const atHangup = (name: 'uuid' | 'billsec') => '\\'.repeat(3) + '${' + name + '}';
 // FreeSWITCH's line-oriented preprocessor skips the XML declaration line.
 // Keep it separate from the document or a valid one-line XML becomes empty.
 const document = (actions: string[]) => `<?xml version="1.0" encoding="UTF-8"?>\n<document type="freeswitch/xml"><section name="dialplan"><context name="public"><extension name="vocivo-authorized-outbound"><condition>${actions.join('\n')}</condition></extension></context></section></document>\n`;
@@ -35,7 +38,7 @@ export async function renderSipOutbound(request: XmlCurlRequest, config: PbxConf
     action('export', 'nolocal:absolute_codec_string=PCMU,PCMA,OPUS'),
     action('set', 'call_timeout=45'),
     action('set', 'session_in_hangup_hook=true'),
-    action('set', `api_hangup_hook=system /bin/sh /opt/vocivo-fs/sip-hangup.sh ${admitted.routeId} \${uuid} \${billsec}`),
+    action('set', `api_hangup_hook=system /bin/sh /opt/vocivo-fs/sip-hangup.sh ${admitted.routeId} ${atHangup('uuid')} ${atHangup('billsec')}`),
     ...(route ? [action('limit', `hash vocivo-carrier ${gateway} ${route.channelLimit} !NORMAL_CIRCUIT_CONGESTION`)] : []),
     action('bridge', `sofia/gateway/${gateway}/+${request.destinationNumber.replace(/^\+/, '')}`),
   ]);

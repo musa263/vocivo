@@ -128,9 +128,15 @@ export function parseKamailioCdr(body: unknown): KamailioCdrEvent | null {
 export function kamailioCdrEvents(record: KamailioCdrEvent, context: CdrContext): StoredCallEvent[] {
   const source = extensionBySip(context.extensions, record.from) || extensionBySip(context.extensions, record.to);
   const target = extensionBySip(context.extensions, record.requestUser) || extensionBySip(context.extensions, record.to);
-  const route = context.route;
+  const route = record.event === 'invite' ? context.route : null;
+  if (route && (route.flow !== 'internal'
+    || route.sourceExtensionId && route.sourceExtensionId !== source?.id
+    || route.destinationExtensionId && route.destinationExtensionId !== target?.id)) return [];
   const organizationId = route?.organizationId || source?.organizationId || target?.organizationId || '';
-  if (!organizationId) return [];
+  // Tenant evidence must agree; a valid signature alone cannot move a call
+  // between companies. Reject conflicting parties as well as route metadata.
+  if (!organizationId || [source?.organizationId, target?.organizationId, route?.organizationId]
+    .some((owner) => owner && owner !== organizationId)) return [];
   const base = {
     type: 'webhook' as const,
     call_session_id: record.callId,
@@ -220,7 +226,10 @@ export function sipCdrEvents(leg: SipCdrLeg, context: CdrContext): StoredCallEve
   const target = extensionBySip(context.extensions, leg.toUser);
   const route = context.route;
   const organizationId = leg.organizationId || route?.organizationId || source?.organizationId || target?.organizationId || '';
-  if (!organizationId) return [];
+  // Tenant evidence must agree; a valid signature alone cannot move a call
+  // between companies. Reject conflicting parties as well as route metadata.
+  if (!organizationId || [source?.organizationId, target?.organizationId, route?.organizationId]
+    .some((owner) => owner && owner !== organizationId)) return [];
 
   let flow: string;
   let direction: 'incoming' | 'outgoing';

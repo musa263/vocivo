@@ -1,5 +1,14 @@
 <include>
   <context name="public">
+    <!-- If the control plane remains unavailable after an AI setup failure,
+         do not re-enter the receptionist through the legacy DID fallback. -->
+    <extension name="vocivo-unavailable-static">
+      <condition field="${vocivo_stage}" expression="^unavailable$">
+        <action application="answer"/>
+        <action application="speak" data="flite|kal|We cannot connect your call right now. Please try again shortly."/>
+        <action application="hangup" data="NORMAL_TEMPORARY_FAILURE"/>
+      </condition>
+    </extension>
     <!-- Kamailio hairpins registered web/PSTN INVITEs onto this profile. Those
          E.164 destinations are outbound origination, not inbound DIDs. -->
     <extension name="vocivo-conference">
@@ -41,7 +50,7 @@
         <action application="set" data="vocivo_did=+$1"/>
         <action application="set" data="curl_timeout=8"/>
         <action application="set" data="curl_connect_timeout=5"/>
-        <action application="curl" data="$${VOCIVO_API_URL}/api/voice/sip-inbound content-type application/json append_headers 'Authorization: Bearer $${SIP_EDGE_SECRET}' post '{&quot;to&quot;:&quot;${vocivo_did}&quot;}'"/>
+        <action application="curl" data="$${VOCIVO_API_URL}/api/voice/sip-inbound content-type application/json append_headers 'Authorization: Basic $${SIP_EDGE_BASIC}' post '{&quot;to&quot;:&quot;${vocivo_did}&quot;,&quot;carrierSourceIp&quot;:&quot;${sip_h_X-Vocivo-Carrier-Source}&quot;}'"/>
         <action application="log" data="INFO Vocivo inbound lookup ${curl_response_code} ${curl_response_data}"/>
         <action application="transfer" data="vocivo-inbound-result XML public"/>
       </condition>

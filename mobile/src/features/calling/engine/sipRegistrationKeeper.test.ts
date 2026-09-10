@@ -157,7 +157,7 @@ test('a REGISTER already in flight is not an error; a refused one is reported', 
   h.failRegister(new Error('403 Forbidden'));
   h.state.registered = false;
   await h.keeper.refresh();
-  assert.equal(h.log.at(-1), 'Unregistered: refresh: 403 Forbidden');
+  assert.equal(h.log.at(-1), 'Reconnecting: refresh: 403 Forbidden');
 });
 
 test('onConnect while already registered does nothing', async () => {
@@ -239,13 +239,15 @@ test('temporary REGISTER rejection after Unregistered preserves a call through r
   assert.equal(h.timers.length, 0);
 });
 
-for (const status of [401, 403]) test(`final ${status} still reports refusal after the provisional recovery state`, async () => {
+for (const status of [401, 403]) test(`final ${status} preserves bounded recovery while HTTPS credentials renew`, async () => {
   const h = harness();
   await h.keeper.start();
   h.state.registered = false;
   h.keeper.onUnregistered();
   h.keeper.onRejected(status, 'Forbidden');
-  assert.equal(h.log.at(-1), `Unregistered: ${status} Forbidden`);
+  assert.equal(h.log.at(-1), `Reconnecting: ${status} Forbidden`);
+  assert.equal(h.log.some(line => line.startsWith('Unregistered:')), false);
+  assert.equal(h.timers.length, 1);
 });
 
 test('late registration callbacks after stop cannot restart recovery or notify the UI', async () => {

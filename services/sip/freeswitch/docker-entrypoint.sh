@@ -1,5 +1,13 @@
 #!/bin/sh
 set -e
+umask 077
+. /opt/vocivo-fs/render-env.sh
+# Validate before command substitutions: a failed substitution inside sed's
+# arguments does not itself make sed fail.
+for value in "${TELNYX_SIP_HOST:-}" "${TELNYX_SIP_REALM:-}" "${TELNYX_SIP_USERNAME:-}" "${TELNYX_SIP_PASSWORD:-}" "${PUBLIC_IP:-}" "${VOCIVO_API_URL:-}" "${SIP_EDGE_SECRET:-}"; do
+  render_value "$value" >/dev/null
+done
+SIP_EDGE_BASIC=$(printf 'vocivo:%s' "${SIP_EDGE_SECRET:-}" | base64 | tr -d '\n')
 vanilla=/usr/share/freeswitch/conf/vanilla
 if [ ! -f /etc/freeswitch/freeswitch.xml ]; then
   mkdir -p /etc/freeswitch
@@ -28,16 +36,17 @@ cp /opt/vocivo-fs/dialplan/default.xml /etc/freeswitch/dialplan/default.xml
 cp /opt/vocivo-fs/directory/default.xml /etc/freeswitch/directory/default.xml
 PUBLIC_IP_REGEX=$(printf '%s' "${PUBLIC_IP:-127.0.0.1}" | sed 's/\./[.]/g')
 sed -i \
-  -e 's#$${TELNYX_SIP_HOST}#'"${TELNYX_SIP_HOST:-sip.telnyx.com}"'#g' \
-  -e 's#$${TELNYX_SIP_REALM}#'"${TELNYX_SIP_REALM:-sip.telnyx.com}"'#g' \
-  -e 's#$${TELNYX_SIP_USERNAME}#'"${TELNYX_SIP_USERNAME:-}"'#g' \
-  -e 's#$${TELNYX_SIP_PASSWORD}#'"${TELNYX_SIP_PASSWORD:-}"'#g' \
-  -e 's#$${PUBLIC_IP}#'"${PUBLIC_IP:-127.0.0.1}"'#g' \
+  -e 's#$${TELNYX_SIP_HOST}#'"$(render_value "${TELNYX_SIP_HOST:-sip.telnyx.com}")"'#g' \
+  -e 's#$${TELNYX_SIP_REALM}#'"$(render_value "${TELNYX_SIP_REALM:-sip.telnyx.com}")"'#g' \
+  -e 's#$${TELNYX_SIP_USERNAME}#'"$(render_value "${TELNYX_SIP_USERNAME:-}")"'#g' \
+  -e 's#$${TELNYX_SIP_PASSWORD}#'"$(render_value "${TELNYX_SIP_PASSWORD:-}")"'#g' \
+  -e 's#$${PUBLIC_IP}#'"$(render_value "${PUBLIC_IP:-127.0.0.1}")"'#g' \
   /etc/freeswitch/sip_profiles/external.xml /etc/freeswitch/sip_profiles/trunk.xml
 sed -i \
-  -e 's#PUBLIC_IP_REGEX#'"${PUBLIC_IP_REGEX}"'#g' \
-  -e 's#$${VOCIVO_API_URL}#'"${VOCIVO_API_URL:-https://vocivo.app}"'#g' \
-  -e 's#$${SIP_EDGE_SECRET}#'"${SIP_EDGE_SECRET:-}"'#g' \
+  -e 's#$${SIP_EDGE_BASIC}#'"${SIP_EDGE_BASIC}"'#g' \
+  -e 's#PUBLIC_IP_REGEX#'"$(render_value "${PUBLIC_IP_REGEX}")"'#g' \
+  -e 's#$${VOCIVO_API_URL}#'"$(render_value "${VOCIVO_API_URL:-https://vocivo.app}")"'#g' \
+  -e 's#$${SIP_EDGE_SECRET}#'"$(render_value "${SIP_EDGE_SECRET:-}")"'#g' \
   /etc/freeswitch/dialplan/public.xml
 
 # The image ships no CA bundle at all (every HTTPS request from FreeSWITCH
@@ -69,8 +78,8 @@ if [ -n "${SIP_EDGE_SECRET:-}" ]; then
   # outbound and internal legs are here either way.
   cp /opt/vocivo-fs/autoload_configs/json_cdr.conf.xml /etc/freeswitch/autoload_configs/json_cdr.conf.xml
   sed -i \
-    -e 's#$${VOCIVO_API_URL}#'"${VOCIVO_API_URL:-https://vocivo.app}"'#g' \
-    -e 's#$${SIP_EDGE_SECRET}#'"${SIP_EDGE_SECRET}"'#g' \
+    -e 's#$${VOCIVO_API_URL}#'"$(render_value "${VOCIVO_API_URL:-https://vocivo.app}")"'#g' \
+    -e 's#$${SIP_EDGE_SECRET}#'"$(render_value "${SIP_EDGE_SECRET}")"'#g' \
     /etc/freeswitch/autoload_configs/json_cdr.conf.xml
   mkdir -p /var/log/freeswitch/json_cdr
   wanted="$wanted mod_json_cdr"
@@ -82,8 +91,8 @@ if [ -n "${SIP_EDGE_SECRET:-}" ]; then
   : "${SIP_EDGE_SECRET:?SIP_EDGE_SECRET is required for the inbound dialplan binding}"
   cp /opt/vocivo-fs/autoload_configs/xml_curl.conf.xml /etc/freeswitch/autoload_configs/xml_curl.conf.xml
   sed -i \
-    -e 's#$${VOCIVO_API_URL}#'"${VOCIVO_API_URL:-https://vocivo.app}"'#g' \
-    -e 's#$${SIP_EDGE_SECRET}#'"${SIP_EDGE_SECRET}"'#g' \
+    -e 's#$${VOCIVO_API_URL}#'"$(render_value "${VOCIVO_API_URL:-https://vocivo.app}")"'#g' \
+    -e 's#$${SIP_EDGE_SECRET}#'"$(render_value "${SIP_EDGE_SECRET}")"'#g' \
     /etc/freeswitch/autoload_configs/xml_curl.conf.xml
   wanted="mod_xml_curl $wanted"
   echo "Vocivo: SIP call routes are authorized by the Vocivo API dialplan."

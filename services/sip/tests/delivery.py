@@ -58,7 +58,7 @@ def delivery_config(source, *, suspended_baseline=False):
             if (is_method("REGISTER")) {
                 if (!save("location")) { sl_reply_error(); exit; }
                 route(RESUME_WAKE);
-                ts_append_by_contact("location", "$tu");
+                ts_append_by_contact("location", "$var(reg_aor)");
                 exit;
             }
             if (is_method("INVITE")) {

@@ -15,6 +15,10 @@ log = logging.getLogger("vocivo.api")
 # shared edge secret is the same one Kamailio already uses for SIP auth.
 
 
+class ReceptionistUnavailable(RuntimeError):
+    """The control plane did not provide an authoritative routing decision."""
+
+
 class VocivoApi:
     def __init__(self, settings: Settings):
         self._settings = settings
@@ -46,11 +50,16 @@ class VocivoApi:
             response.raise_for_status()
         except httpx.HTTPError as error:
             log.error("could not load receptionist (%s)", type(error).__name__)
-            return None
-        payload: dict[str, Any] = response.json()
-        if not payload.get("enabled", True):
-            return None
-        return Assistant.from_api(payload)
+            raise ReceptionistUnavailable("Receptionist configuration unavailable") from error
+        try:
+            payload: dict[str, Any] = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid receptionist configuration")
+            if not payload.get("enabled", True):
+                return None
+            return Assistant.from_api(payload)
+        except (ValueError, TypeError, AttributeError) as error:
+            raise ReceptionistUnavailable("Invalid receptionist configuration") from error
 
     async def record_conversation(self, payload: dict[str, Any]) -> None:
         """Best effort: a call that happened matters more than its record of it."""

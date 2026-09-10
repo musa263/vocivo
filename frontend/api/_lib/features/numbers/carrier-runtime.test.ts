@@ -1,3 +1,4 @@
+import { managedCarrierSourceAllowed } from './carrier-runtime.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeCarrierTrunk, type CarrierTrunk } from './carrier-trunk-store.js';
@@ -79,4 +80,12 @@ test('an outbound-only deployment admits outbound without claiming inbound activ
   assert.match(carrierReadiness(trunk, [outboundOnly]).reason, /Inbound calling has not been deployed/);
   assert.equal((await resolveCarrierOutbound(config, 'primary', did, [trunk], [outboundOnly]))?.gateway, deployment.gateway);
   assert.equal(resolveInboundNumber(config, did, trunk.server, [outboundOnly]), '');
+});
+
+
+test('managed sources cannot inherit BYOC admission or accept unknown carrier origins', () => {
+  assert.equal(managedCarrierSourceAllowed('192.0.2.1', ''), false);
+  assert.equal(managedCarrierSourceAllowed('192.0.2.1', '192.0.2.0/24'), true);
+  assert.equal(managedCarrierSourceAllowed('198.51.100.1', '192.0.2.0/24'), false);
+  assert.throws(() => managedCarrierSourceAllowed('192.0.2.1', '192.0.2.0/99'), /Invalid managed/);
 });

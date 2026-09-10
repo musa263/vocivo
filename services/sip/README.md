@@ -1,6 +1,9 @@
 # Vocivo SIP edge
 
-Kamailio (registrar, WSS, fork), RTPEngine (media), and FreeSWITCH (Telnyx PSTN gateway). Telnyx is only an Elastic SIP trunk. Internal calls stay on this host and are not billed as Telnyx Call Control.
+Kamailio handles registration, WSS and call delivery; RTPEngine mediates media;
+FreeSWITCH executes PBX dialplans and routes authorized calls through the tenant's
+carrier or an explicitly configured managed trunk. Tenant BYOC does not fall
+back to Telnyx. Internal calls stay on this host.
 
 Production web and iOS stay on the Telnyx SDK until `VOCIVO_VOICE_EDGE=sip` is set on Vercel **and** this stack is reachable.
 
@@ -100,10 +103,10 @@ Other things `kamailio.cfg` gets right that are easy to break:
 
 - In-dialog requests (`has_totag()`) are handled *before* the INVITE block,
   so a re-INVITE (hold, ICE restart) is never treated as a new call.
-- The answer's media profile is chosen for the side it travels *to*: `FLT_WS`
-  marks requests from the WebSocket port, and `MANAGE_REPLY` rewrites the
-  answer as DTLS-SRTP/ICE for them and plain RTP/AVP for the switch and the
-  carrier. A web phone's Contact is aliased on replies too.
+- The core reply hook chooses the answer's media profile from the original
+  request listener: DTLS-SRTP/ICE for WSS clients and plain RTP/AVP for the
+  switch and carrier. It can suppress a final answer if conversion fails.
+  `MANAGE_REPLY` handles Contact aliases and call-record events afterwards.
 - `sounds/hold-music.wav` is what callers hear while waiting; the API's
   dialplan names it as `ringback` and `hold_music`.
 
@@ -337,3 +340,67 @@ IP ownership, registration/TLS, inbound-port requirements, deployment records,
 rollback and real-carrier acceptance. The Docker tenant-carriers workflow checks
 actual SIP, RTP echo, caller ID, gateway isolation and capacity against loopback
 peers. It does not certify Go Telecom, physical devices or inbound deployment.
+
+## SIP/PBX reliability repair (September 2026)
+
+The edge rejects unknown dialogs, including renegotiation and BYE. Drain active
+calls before replacing Kamailio; dialog state is not persisted across restart.
+Known-dialog ACK/UPDATE/BYE and late-registration delivery have wire regressions.
+REGISTER wake and TSILO keys use the canonical user/domain AOR, ignoring URI
+ports. No-contact wake remains 45 seconds. After delivery, trusted loopback PBX
+legs have a 130-second response timer and 180-second total ceiling; FreeSWITCH
+still enforces the configured ringing timeout (up to 120 seconds). App-originated
+legs retain their 45-second bound.
+
+Media offers fail with 503 if rtpengine cannot process them. The core reply hook
+matches the transaction before converting SDP, and suppresses failed SDP replies
+before TM can forward a final 200. A named onreply route cannot drop final 2xx in
+Kamailio 5.8. The recipient format comes from the original request's listener.
+This handles control failures, not silent packet loss after successful negotiation;
+physical two-way media remains an acceptance gate.
+
+Only initial Kamailio CDR events carry the admitted route token. Later events
+join by Call-ID. The API rejects conflicting tenant/party evidence and ignores
+legacy late-event tokens. Ship the edge and API together; retained outbox events
+remain readable.
+
+FreeSWITCH hangup and voicemail hooks now write private durable jobs. The
+`sip-outbox` service retries them, plus mod_json_cdr failure files, every minute
+while the API is unavailable. The worker verifies signed voicemail metadata and
+the configured API origin before renewing the same upload grant; it cannot change
+the tenant or call. Only accepted deliveries are deleted. Persistent volumes
+`freeswitch-data` and `freeswitch-cdr` retain failed jobs through container
+replacement. Monitor disk space and oldest undelivered-job age; this worker does
+not silently discard private recordings on a retention deadline. Apply the
+company's retention policy during operational recovery.
+
+**Before the first deployment with these volumes**, drain FreeSWITCH, stop it,
+and copy existing `/var/lib/vocivo` and `/var/log/freeswitch/json_cdr` data out of
+the stopped container. Seed the new volumes with that backup before recreating
+the service. New empty mounts otherwise hide the old container's files. Preserve
+the backup until delivery is verified. Start `sip-outbox` with FreeSWITCH; rolling
+back to the old hook requires retaining these volumes and draining queued jobs.
+Legacy `.failed` voicemail files lack the new signed upload metadata and do not
+automatically replay. Preserve them separately and reconcile them with their
+tenant/call records before restoring uploads; do not rename or delete them to
+make the queue appear empty. No customer recording migration was performed by
+the local repair tests.
+
+Managed carrier inbound source permission is now separate from BYOC deployments.
+Configure `VOCIVO_MANAGED_TRUNK_SOURCES` on the API only for explicitly approved
+managed-provider IPv4 addresses/CIDRs. Empty disables managed DID admission. Go
+Telecom continues to use tenant deployment records and requires no managed-source
+allowlist. The static lookup includes the edge-stamped carrier source, and refuses
+complex destinations instead of broadening a ring group to the whole company.
+
+Run `python3 services/sip/tests/validate_repairs.py` on Linux with Docker for the
+new negative and positive wire checks, followed by `validate_edge.py`,
+`validate_forward_auth.py`, `validate_gateway_load.py`, and the tenant-carrier
+SIP/RTP fixture. Run the Python `test_*.py` suite for spool and rendering failures.
+No fixture authorizes production carrier calls or certifies mobile audio.
+
+`validate_byoc.py` also checks final hangup durations from the real shell hook.
+The hook's channel variables survive both FreeSWITCH application-expansion passes
+and are evaluated at hangup. `validate_outbox.py` injects HTTP 503, recreates the
+container on the same private volume, and verifies deletion only after HTTP 201.
+The [1.11.3 candidate build](freeswitch/image/README.md) uses these same gates.

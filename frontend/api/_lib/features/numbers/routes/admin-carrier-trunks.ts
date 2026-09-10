@@ -6,7 +6,7 @@ import { requestOrganizationId, writeTenantScopeError } from '../../organization
 import { requireFeature } from '../../organizations/saas-access.js';
 import { listExtensions } from '../../organizations/pbx.js';
 import { carrierTrunks, CarrierTrunkError, normalizeCarrierTrunk } from '../carrier-trunk-store.js';
-import { removeCompanyNumber, useCarrierNumbers, withLiveNumberRoutes } from '../carrier-number-service.js';
+import { removeCompanyNumber, useCarrierNumbers, withLiveNumberRoutes, publishCarrierNumbers } from '../carrier-number-service.js';
 import { carrierReadiness } from '../carrier-runtime.js';
 
 export function createCarrierTrunksHandler(deps = { requireAdmin, readPbxConfig, requireFeature, listExtensions, store: carrierTrunks }, numberOps = { removeCompanyNumber, useCarrierNumbers }) {
@@ -41,7 +41,7 @@ export function createCarrierTrunksHandler(deps = { requireAdmin, readPbxConfig,
       for (const number of draft.numbers) {
         const live = config.numberAssignments[number.callerId];
         if (live?.organizationId === organizationId && live.carrierTrunkId === draft.id
-          && (number.destinationType !== (live.destinationType || 'unassigned') || number.destinationId !== (live.destinationId || ''))) {
+          && (number.destinationType !== (live.disabled ? 'unassigned' : live.destinationType || 'unassigned') || number.destinationId !== (live.disabled ? '' : live.destinationId || ''))) {
           throw new CarrierTrunkError(409, 'Routing changed. Manage published destinations in Phone numbers or Users, then reload this trunk.');
         }
       }
@@ -54,13 +54,15 @@ export function createCarrierTrunksHandler(deps = { requireAdmin, readPbxConfig,
           : number.destinationType === 'ivr' ? pbx.callHandling.ivrs : null;
         if (targets && !targets.some(item => item.id === number.destinationId)) throw new CarrierTrunkError(400, 'Choose a destination from this company.');
       }
-      const trunk = await deps.store.save(organizationId, { ...draft, password: req.body.password, revision: req.body.revision });
-      // Publication updates inventory metadata without replacing live destinations.
-      // Connection edits still require a matching operator deployment record.
-      if (Object.values(config.numberAssignments).some(item => item.organizationId === organizationId && item.carrierTrunkId === trunk.id && !item.disabled)) {
-        const subscription = await deps.requireFeature({ ...access.session, organizationId }, 'phoneNumbers', config);
-        await numberOps.useCarrierNumbers(organizationId, trunk.id, trunk.revision, subscription.superadmin ? 10000 : subscription.plan!.limits.phoneNumbers);
-      }
+      const published = Object.values(config.numberAssignments).some(item => item.organizationId === organizationId && item.carrierTrunkId === draft.id && !item.disabled);
+      const subscription = published ? await deps.requireFeature({ ...access.session, organizationId }, 'phoneNumbers', config) : null;
+      const limit = subscription ? subscription.superadmin ? 10000 : subscription.plan!.limits.phoneNumbers : undefined;
+      const trunk = await deps.store.save(organizationId, { ...draft, password: req.body.password, revision: req.body.revision }, (current, saved) => {
+        const live = Object.values(current.numberAssignments).some(item => item.organizationId === organizationId && item.carrierTrunkId === saved.id && !item.disabled);
+        if (!live) return undefined;
+        if (limit === undefined) throw new CarrierTrunkError(409, 'Publication changed. Reload this trunk before saving.');
+        return publishCarrierNumbers(current, organizationId, saved, limit);
+      });
       const { status, reason } = carrierReadiness(trunk);
       return res.status(200).json({ trunk: { ...withLiveNumberRoutes(trunk, await deps.readPbxConfig()), connectionStatus: status, connectionMessage: reason } });
     } catch (error) {

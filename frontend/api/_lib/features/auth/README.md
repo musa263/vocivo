@@ -12,6 +12,12 @@ bootstrap aggregates permitted data after authentication; it is not SIP startup.
 Colocated tests cover revocation, role boundaries and escalation. Run frontend
 `npm test` and `npm run check:api` after changes.
 
+Session restoration returns 401 for explicit identity/revocation or JWT failures.
+Temporary authority, PBX configuration and subscription failures return 503 with
+Retry-After, preserving the client's transient-error path and cookies. This does
+not authorize requests while a dependency is unavailable. The session route tests
+cover both outcomes; browser and physical active-call acceptance remain separate.
+
 ## Owner login storage
 
 `owner-password.ts` verifies the owner's bcrypt password using the encrypted

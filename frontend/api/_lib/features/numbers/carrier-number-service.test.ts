@@ -69,3 +69,13 @@ test('trunk republication cannot overwrite destinations assigned through Users o
   assert.equal(withLiveNumberRoutes(saved, config).numbers[0].destinationId, 'user-2001');
   assert.equal(saved.numbers[0].destinationType, 'unassigned', 'legacy inventory is not mutated');
 });
+
+test('editing and republishing a trunk preserves removed-number tombstones', () => {
+  const saved = trunk(), config = defaultPbxConfig();
+  Object.assign(config, applyCarrierNumbers(config, 'primary', saved));
+  const number = saved.numbers[0].callerId;
+  Object.assign(config, detachCompanyNumber(config, 'primary', number));
+  const next = applyCarrierNumbers(config, 'primary', { ...saved, revision: 2 });
+  assert.equal(next.numberAssignments[number].disabled, true);
+  assert.notEqual(next.organizationSettings.primary.company.defaultCallerId, number);
+});

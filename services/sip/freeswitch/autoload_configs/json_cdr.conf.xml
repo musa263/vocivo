@@ -4,8 +4,8 @@
   FreeSWITCH posts one JSON record per call leg to the Vocivo API when the leg
   ends; the API turns it into the tenant's call history and event log — the
   same records the carrier's webhooks used to provide before inbound moved to
-  this edge. Records that cannot be delivered are kept on disk and retried by
-  hand from err-log-dir. $${...} placeholders are substituted by
+  this edge. Records that cannot be delivered remain in the persistent
+  err-log-dir and are retried by sip-outbox. $${...} placeholders are substituted by
   docker-entrypoint.sh.
 -->
 <configuration name="json_cdr.conf" description="Vocivo call records">

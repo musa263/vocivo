@@ -104,3 +104,12 @@ into routes: that field never proved number ownership or caller intent.
 Validation: `number-routing.test.ts`, `carrier-number-service.test.ts`, the browser
 regression in the admin README, and root `bash verify.sh`. These prove local route
 selection and isolation with fixtures, not live carrier reachability or audio.
+
+Carrier form saves and publication now lock the encrypted trunk record and PBX
+configuration in one object-group transaction. Validation or plan-limit failure
+rolls back both; publishing a stale revision fails. Company feature checks happen
+before mutation. Disabled-number tombstones survive later trunk edits and cannot
+become the default outgoing line. GET/PUT agree on their unassigned presentation.
+Inventory reports inbound availability only when the deployment actually includes
+inbound sources. Managed source admission uses `VOCIVO_MANAGED_TRUNK_SOURCES`,
+independently of BYOC deployment entries.

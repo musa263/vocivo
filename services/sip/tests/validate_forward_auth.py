@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Offline Kamailio-to-FreeSWITCH credential boundary regression."""
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import time
 import uuid
 from auth import auth_config
 from temporary_carrier_pbx import IMAGE
+IMAGE = os.environ.get('VOCIVO_TEST_FS_IMAGE', IMAGE)
 
 
 def run(*args, check=True):
@@ -30,9 +32,13 @@ def main():
                 '-v', str(config) + ':/test.cfg:ro', '-e', 'VOCIVO_SIP_REALM=check', '--entrypoint', 'kamailio',
                 'ghcr.io/kamailio/kamailio-ci:5.8.4-alpine', '-DD', '-E', '-f', '/test.cfg')
             started.append(name + '-kam')
-            time.sleep(12)
-            if 'is ready' not in run('docker', 'exec', name, 'fs_cli', '-x', 'status').stdout:
-                raise RuntimeError('FreeSWITCH did not finish startup')
+            deadline = time.monotonic() + 90
+            while 'is ready' not in run('docker', 'exec', name, 'fs_cli', '-x', 'status', check=False).stdout:
+                if time.monotonic() >= deadline:
+                    logs = run('docker', 'logs', name, check=False)
+                    print(logs.stdout[-6000:] + logs.stderr[-6000:])
+                    raise RuntimeError('FreeSWITCH did not finish startup')
+                time.sleep(2)
             result = run('docker', 'run', '--rm', '--network', 'container:' + name,
                          '-v', str(root / 'tests') + ':/tests:ro', 'python:3.12-alpine', 'python', '/tests/fs_auth_wire.py', check=False)
             if result.returncode:

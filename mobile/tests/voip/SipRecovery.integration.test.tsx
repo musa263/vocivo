@@ -124,6 +124,23 @@ test('network migration does not replace a stack carrying a call', async () => {
   expect(require('../../src/features/calling/runtime/sipNative').refreshVocivoSip).toHaveBeenCalled();
 });
 
+test('active-call Digest refusal single-flights fresh credentials instead of repeating the rejected password', async () => {
+  await act(async () => { tree = TestRenderer.create(<Probe />); });
+  inputs.activeCallRef.current = { callId: 'live-call' } as never;
+  const { onSipRegistration, refreshVocivoSip } = require('../../src/features/calling/runtime/sipNative');
+  const outcome = onSipRegistration.mock.calls.at(-1)[0];
+  (ensureSipRegistration as jest.Mock).mockClear();
+  await act(async () => {
+    outcome('reconnecting', '403 Forbidden');
+    outcome('reconnecting', '403 Forbidden');
+    await jest.advanceTimersByTimeAsync(3000);
+  });
+  expect(ensureSipRegistration).toHaveBeenCalledTimes(1);
+  expect(ensureSipRegistration).toHaveBeenCalledWith(true);
+  expect(refreshVocivoSip).not.toHaveBeenCalled();
+  expect(inputs.activeCallRef.current).toEqual({ callId: 'live-call' });
+});
+
 test('network recovery retries a failed HTTPS bootstrap and stops after success', async () => {
   await act(async () => { tree = TestRenderer.create(<Probe />); });
   const network = require('@react-native-community/netinfo').default.addEventListener.mock.calls.at(-1)[0];

@@ -168,18 +168,21 @@ export function useVoiceRegistration({
           }
         };
 
-        const recoverSip = async (renew = false) => {
+        const recoverSip = async (renew = false, renewDuringCall = false) => {
           if (canceled) return;
           if (sipRecoveryTimer) clearTimeout(sipRecoveryTimer);
           try {
             // A new stack would dispose an active/incoming call. Preserve it
             // and let signaling/media recovery run on the existing stack.
-            if (activeCallRef.current || (voice.currentCalls?.length ?? 0) > 0) await refreshVocivoSip();
+            // A Digest refusal needs fresh HTTPS credentials even in a call.
+            // SipStackBridge updates same-identity credentials in place and
+            // refuses identity changes while a call owns the stack.
+            if (!renewDuringCall && (activeCallRef.current || (voice.currentCalls?.length ?? 0) > 0)) await refreshVocivoSip();
             else await registerOnSipEdge(renew);
             sipRecoveryAttempts = 0;
           } catch (failure) {
             reportVoiceError('recover SIP registration', failure);
-            if (!canceled) sipRecoveryTimer = setTimeout(() => { void recoverSip(renew); }, Math.min(60_000, 5000 * 2 ** Math.min(sipRecoveryAttempts++, 4)));
+            if (!canceled) sipRecoveryTimer = setTimeout(() => { void recoverSip(renew, renewDuringCall); }, Math.min(60_000, 5000 * 2 ** Math.min(sipRecoveryAttempts++, 4)));
           }
         };
 
@@ -200,7 +203,7 @@ export function useVoiceRegistration({
               // challenges. Repeating the rejected password cannot recover it.
               sipAuthTimer = setTimeout(() => {
                 sipAuthTimer = undefined;
-                void recoverSip(true);
+                void recoverSip(true, true);
               }, Math.min(300_000, 3000 * 2 ** Math.min(sipAuthAttempts++, 7)));
             }
           });

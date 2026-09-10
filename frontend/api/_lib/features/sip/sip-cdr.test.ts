@@ -170,3 +170,15 @@ test('out-of-range CDR timestamps are unreadable records, not endlessly retried 
   assert.equal(fallback?.startedAt, '2025-09-03T11:46:40.000Z');
   assert.equal(fallback?.endedAt, fallback?.startedAt);
 });
+
+test('CDR tenant evidence and route participants must agree', () => {
+  const event = parseKamailioCdr({ source: 'kamailio', event: 'invite', callId: 'isolated', from: 'alice', to: 'bob', requestUser: 'bob', at: 1756900500 })!;
+  const route: VoiceRouteAuthorization = { routeId: 'route-fixture', organizationId: 'acme', destination: 'sip:bob@vocivo', callerId: '', callerName: 'Alice', callerExtension: '2001', sourceExtensionId: 'e1', destinationExtensionId: 'e2', flow: 'internal', expiresAt: 1 };
+  assert.equal(kamailioCdrEvents(event, { extensions, route }).length, 1);
+  for (const invalid of [{ ...route, organizationId: 'other' }, { ...route, sourceExtensionId: 'unrelated' }, { ...route, destinationExtensionId: 'unrelated' }]) {
+    assert.deepEqual(kamailioCdrEvents(event, { extensions, route: invalid }), []);
+  }
+  assert.deepEqual(kamailioCdrEvents(event, { extensions: [alice, { ...bob, organizationId: 'other' }], route: null }), []);
+  const leg = parseSipCdr(record({ uuid: 'conflict', sip_from_user: 'alice', sip_to_user: 'bob', vocivo_org: 'other', start_epoch: '1756900500' }))!;
+  assert.deepEqual(sipCdrEvents(leg, { extensions, route: null }), []);
+});

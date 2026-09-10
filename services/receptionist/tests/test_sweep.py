@@ -179,3 +179,33 @@ class Sweep(unittest.IsolatedAsyncioTestCase):
         connection.hangup.assert_not_awaited()
         self.assertTrue(any(call.args[0]=='transfer' for call in connection.execute.call_args_list))
         connection.close.assert_awaited_once()
+
+    async def test_cleanup_failure_preserves_speech_failure(self):
+        from app.speech import SpeechSynthesisError
+        with TemporaryDirectory() as directory:
+            connection = Mock(uuid='fixture', hungup=asyncio.Event())
+            connection.set, connection.execute = AsyncMock(), AsyncMock()
+            connection.api = AsyncMock(side_effect=RuntimeError('cleanup failed'))
+            handler = CallHandler(Settings(audio_dir=directory), None, None, None, None)
+            with self.assertRaises(SpeechSynthesisError):
+                await handler._with_interruption(connection, AsyncMock(side_effect=SpeechSynthesisError('voice unavailable')))
+
+    async def test_api_outage_is_not_an_authoritative_absent_receptionist(self):
+        from app.api import VocivoApi, ReceptionistUnavailable
+        api = VocivoApi(Settings())
+        await api._client.aclose()
+        api._client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(503)))
+        try:
+            with self.assertRaises(ReceptionistUnavailable):
+                await api.assistant_for('fixture', 'fixture')
+        finally:
+            await api.close()
+        connection = Mock(uuid='fixture', hungup=asyncio.Event())
+        connection.connect = AsyncMock(return_value={'variable_vocivo_org':'tenant-a', 'variable_vocivo_did':'+12025550123'})
+        connection.set, connection.execute, connection.hangup, connection.close = AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
+        handler = CallHandler(Settings(), None, None, None, Mock(assistant_for=AsyncMock(side_effect=ReceptionistUnavailable())))
+        await handler.handle(connection)
+        connection.set.assert_any_await('vocivo_from_receptionist', '0')
+        connection.set.assert_any_await('vocivo_stage', 'unavailable')
+        connection.execute.assert_awaited_once_with('transfer', '+12025550123 XML public')
+        connection.hangup.assert_not_awaited()

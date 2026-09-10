@@ -320,6 +320,20 @@ export class PbxConfigConflictError extends Error {
 
 type PbxConfigUpdate = Partial<PbxConfig> | ((current: PbxConfig) => Partial<PbxConfig> | PbxConfig);
 
+/** Storage contract for atomic multi-object updates (for example trunk + DIDs).
+ * Callers must lock pathname with their other objects; every write is validated.
+ */
+export const pbxConfigStorage = {
+  pathname,
+  read: (stored: Buffer | null) => mergePbxConfig(stored ? decrypt(stored) : defaultPbxConfig()),
+  update(current: PbxConfig, patch: Partial<PbxConfig>) {
+    const next = mergePbxConfig({ ...current, ...patch, updatedAt: new Date().toISOString() });
+    validatePbxConfig(next);
+    return encrypt(next);
+  },
+  invalidate() { cachedConfig = null; },
+};
+
 export async function savePbxConfig(input: PbxConfigUpdate, options: { expectedUpdatedAt?: string } = {}): Promise<PbxConfig> {
   let next: PbxConfig | null = null;
   await transactObject(pathname, (stored) => {

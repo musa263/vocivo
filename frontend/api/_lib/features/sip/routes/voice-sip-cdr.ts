@@ -28,12 +28,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const relayed = parseKamailioCdr(body);
     const leg = relayed ? null : parseSipCdr(body);
     if (!relayed && !leg) return res.status(200).json({ recorded: false, reason: 'not_a_call_record' });
-    const token = relayed?.routeToken || leg?.routeToken || '';
+    const token = relayed ? (relayed.event === 'invite' ? relayed.routeToken : '') : leg?.routeToken || '';
     const route = token ? verifyVoiceRouteToken(token, { allowExpired: true }) : null;
+    if (token && !route) return res.status(200).json({ recorded: false, reason: 'invalid_route' });
     const context = { extensions: await listExtensions(), route };
     const events = relayed ? kamailioCdrEvents(relayed, context) : sipCdrEvents(leg!, context);
     if (!events.length) {
-      console.warn('vocivo sip cdr belongs to no tenant', JSON.stringify(relayed ? { callId: relayed.callId, from: relayed.from, to: relayed.to, event: relayed.event } : { uuid: leg!.uuid, from: leg!.fromUser, to: leg!.toUser, flow: leg!.flow }));
+      console.warn('vocivo sip cdr belongs to no tenant', JSON.stringify(relayed ? { callId: relayed.callId, event: relayed.event } : { uuid: leg!.uuid, flow: leg!.flow }));
       return res.status(200).json({ recorded: false, reason: 'no_tenant' });
     }
     for (const event of events) await storeCallEvent(event);

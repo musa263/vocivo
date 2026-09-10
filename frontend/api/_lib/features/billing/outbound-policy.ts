@@ -31,7 +31,8 @@ function isInternational(destination: string, callerId: string) {
   try {
     const destinationCountry = parsePhoneNumber(destination).country;
     const callerCountry = parsePhoneNumber(callerId).country;
-    return Boolean(destinationCountry && callerCountry && destinationCountry !== callerCountry);
+    // An unknown numbering region cannot establish permission for a domestic call.
+    return !destinationCountry || !callerCountry || destinationCountry !== callerCountry;
   } catch {
     return true;
   }

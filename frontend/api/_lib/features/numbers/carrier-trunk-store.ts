@@ -1,6 +1,7 @@
+import { pbxConfigStorage, type PbxConfig } from '../organizations/pbx-config-store.js';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { isIP } from 'node:net';
-import { readObject, transactObject } from '../../shared/object-store.js';
+import { readObject, transactObject, transactObjectGroup, type ObjectGroupMutation } from '../../shared/object-store.js';
 import { tenantStorageKey } from '../../shared/tenant-storage.js';
 import { requiredEnv } from '../../shared/http.js';
 
@@ -69,11 +70,13 @@ export function normalizeCarrierTrunk(input: Record<string, unknown>, organizati
   return { id, organizationId, status: 'draft', name: text(input.name, 'trunk name', 100, true), provider: text(input.provider, 'provider', 100, true), accountReference: text(input.accountReference, 'account reference', 100), server, port, transport: input.transport as CarrierTrunk['transport'], publicIp, hostingProvider: text(input.hostingProvider, 'hosting provider', 100), authentication: input.authentication as CarrierTrunk['authentication'], username: text(input.username, 'SIP username', 100), mainNumber, outboundProxy, outboundProxyPort, channelLimit, inboundEnabled: optionalDirection(input.inboundEnabled), outboundEnabled: optionalDirection(input.outboundEnabled), numbers, notes: text(input.notes, 'notes', 500) };
 }
 
+type Publication = (config: PbxConfig, trunk: CarrierTrunk) => Partial<PbxConfig> | undefined;
 type Storage = {
+  transactObjectGroup?: (lockKey: string, paths: string[], update: (current: Map<string, { body: Buffer; etag: string }>) => ObjectGroupMutation<unknown> | Promise<ObjectGroupMutation<unknown>>) => Promise<unknown>;
   readObject: (path: string) => Promise<Buffer | null>;
   transactObject: (path: string, update: (body: Buffer | null) => Buffer | Promise<Buffer>, options: { access: 'private'; contentType: string }) => Promise<unknown>;
 };
-export function createCarrierTrunkStore(deps: Storage = { readObject, transactObject }) {
+export function createCarrierTrunkStore(deps: Storage = { readObject, transactObject, transactObjectGroup }) {
   const path = (org: string) => `vocivo/carrier-trunks/v1/${tenantStorageKey(org)}.bin`;
   const key = () => createHash('sha256').update(`${requiredEnv('AUTH_SECRET')}:carrier-trunks:v1`).digest();
   const encrypt = (state: State) => {
@@ -91,6 +94,18 @@ export function createCarrierTrunkStore(deps: Storage = { readObject, transactOb
   };
   return {
     async list(organizationId: string) { return decode(await deps.readObject(path(organizationId)), organizationId).trunks; },
+    async publish(organizationId: string, id: string, revision: number, publication: Publication) {
+      if (!deps.transactObjectGroup) throw new Error('Atomic carrier publication unavailable.');
+      const result = await deps.transactObjectGroup(path(organizationId), [path(organizationId), pbxConfigStorage.pathname], current => {
+        const trunk = decode(current.get(path(organizationId))?.body || null, organizationId).trunks.find(item => item.id === id);
+        if (!trunk || trunk.revision !== revision) throw new CarrierTrunkError(409, 'The trunk changed. Reload before selecting its numbers.');
+        const pbx = pbxConfigStorage.read(current.get(pbxConfigStorage.pathname)?.body || null);
+        const patch = publication(pbx, trunk);
+        return { puts: patch ? [{ pathname: pbxConfigStorage.pathname, value: pbxConfigStorage.update(pbx, patch) }] : [], result: trunk };
+      });
+      pbxConfigStorage.invalidate();
+      return result as CarrierTrunk;
+    },
     /** Deployment tooling only. No HTTP company route exposes this value. */
     async provisioning(organizationId: string, id: string, revision: number) {
       const state = decode(await deps.readObject(path(organizationId)), organizationId);
@@ -98,14 +113,14 @@ export function createCarrierTrunkStore(deps: Storage = { readObject, transactOb
       if (!trunk) throw new CarrierTrunkError(409, 'The requested trunk revision is not current.');
       return { trunk, password: state.passwords?.[id] || '' };
     },
-    async save(organizationId: string, input: Record<string, unknown>) {
+    async save(organizationId: string, input: Record<string, unknown>, publication?: Publication) {
       const draft = normalizeCarrierTrunk(input, organizationId);
       const password = input.password === undefined || input.password === '' ? undefined : input.password;
       if (password !== undefined && (typeof password !== 'string' || password.length > 256 || /[\r\n\0]|\$\{/.test(password))) throw new CarrierTrunkError(400, 'Invalid SIP password.');
       const expected = Number(input.revision);
       if (!Number.isInteger(expected) || expected < 0) throw new CarrierTrunkError(400, 'A configuration revision is required.');
       let saved: CarrierTrunk | undefined;
-      await deps.transactObject(path(organizationId), body => {
+      const update = (body: Buffer | null) => {
         const state = decode(body, organizationId), current = state.trunks.find(item => item.id === draft.id);
         if ((current?.revision || 0) !== expected) {
           // Retrying the same create request is safe; another edit still conflicts.
@@ -124,7 +139,20 @@ export function createCarrierTrunkStore(deps: Storage = { readObject, transactOb
         saved = { ...draft, hasPassword: Boolean(state.passwords[draft.id]), connectionRevision: sameConnection ? current.connectionRevision || current.revision : expected + 1, revision: expected + 1, updatedAt: new Date().toISOString() };
         state.trunks = [...state.trunks.filter(item => item.id !== draft.id), saved];
         return encrypt(state);
-      }, { access: 'private', contentType: 'application/octet-stream' });
+      };
+      if (publication) {
+        if (!deps.transactObjectGroup) throw new Error('Atomic carrier publication unavailable.');
+        await deps.transactObjectGroup(path(organizationId), [path(organizationId), pbxConfigStorage.pathname], current => {
+          const value = update(current.get(path(organizationId))?.body || null);
+          const pbx = pbxConfigStorage.read(current.get(pbxConfigStorage.pathname)?.body || null);
+          const patch = publication(pbx, saved!);
+          return { puts: [{ pathname: path(organizationId), value },
+            ...(patch ? [{ pathname: pbxConfigStorage.pathname, value: pbxConfigStorage.update(pbx, patch) }] : [])], result: true };
+        });
+        pbxConfigStorage.invalidate();
+      } else {
+        await deps.transactObject(path(organizationId), update, { access: 'private', contentType: 'application/octet-stream' });
+      }
       return saved!;
     },
   };

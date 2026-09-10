@@ -119,3 +119,8 @@ to 20 seconds of display delay. Short tombstones block stale resurrection.
 Presence cannot grant a call or prove RTP/push reachability. Failed presence reads
 return offline without disabling the directory. New clients/backend must be
 released together for indicators; old clients do not publish availability.
+
+`pbxConfigStorage` exposes the validated encrypted-object contract for composite
+transactions. Carrier publication locks its pathname together with the trunk
+object, validates the merged PBX configuration, and invalidates this process's
+cache after commit. Single-object PBX writes keep their existing transaction path.

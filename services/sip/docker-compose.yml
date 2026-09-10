@@ -60,6 +60,8 @@ services:
       VOCIVO_SIP_INBOUND: ${VOCIVO_SIP_INBOUND:-0}
     volumes:
       - freeswitch-etc:/etc/freeswitch
+      - freeswitch-cdr:/var/log/freeswitch/json_cdr
+      - freeswitch-data:/var/lib/vocivo
       - ./freeswitch:/opt/vocivo-fs:ro
       # Operator-provisioned carrier gateways survive source synchronization.
       - /opt/vocivo/carriers:/opt/vocivo-carriers:ro
@@ -76,6 +78,22 @@ services:
       # makes `docker compose config` reject the file, taking SIP down with it.
       - receptionist-audio:/var/lib/vocivo-receptionist
     entrypoint: ["/bin/sh", "/opt/vocivo-fs/docker-entrypoint.sh"]
+
+  sip-outbox:
+    image: python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      VOCIVO_API_URL: ${VOCIVO_API_URL:-https://vocivo.app}
+      SIP_EDGE_SECRET: ${SIP_EDGE_SECRET:?SIP_EDGE_SECRET is required}
+      PYTHONDONTWRITEBYTECODE: '1'
+    volumes:
+      - ./freeswitch/outbox.py:/app/outbox.py:ro
+      - freeswitch-cdr:/var/log/freeswitch/json_cdr
+      - freeswitch-data:/var/lib/vocivo
+    command: [python3, /app/outbox.py]
 
   coturn:
     image: coturn/coturn:4.6
@@ -106,6 +124,8 @@ services:
       - --denied-peer-ip=192.168.0.0-192.168.255.255
 
 volumes:
+  freeswitch-cdr:
+  freeswitch-data:
   freeswitch-etc:
   kamailio-usrloc:
   receptionist-audio:

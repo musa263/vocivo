@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Validate the temporary relay in Docker with no external networking or calls."""
 import json
+import os
 from pathlib import Path
 import secrets
 import subprocess
 import tempfile
 import uuid
 from temporary_carrier_pbx import IMAGE
+IMAGE = os.environ.get('VOCIVO_TEST_FS_IMAGE', IMAGE)
 from temporary_carrier_relay import relay_xml
 
 

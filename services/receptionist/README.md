@@ -217,3 +217,12 @@ Fresh and cached speech WAVs must contain complete PCM16 frames. These checks
 validate the audio container, not perceived speech quality. See
 [the second-sweep report](../../docs/audits/ai-quality-sweep-2-2026-09-07.md)
 for regression evidence and remaining acceptance gates.
+
+Configuration outages now raise `ReceptionistUnavailable`, distinct from an
+explicit 404/disabled assistant. A call already carrying trusted PBX tenant/DID
+variables returns to the `unavailable` stage with receptionist recursion disabled.
+If the API is still unavailable, the static FreeSWITCH stage provides a bounded
+local announcement and ends the call; it never re-enters the AI loop. Without
+that tenant/DID evidence the service releases the leg with a temporary-failure
+cause. Interruption-recorder cleanup failures are logged without replacing the
+original speech error, so the configured speech-failure fallback still runs.

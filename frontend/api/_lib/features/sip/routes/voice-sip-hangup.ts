@@ -15,8 +15,7 @@ import { readVoiceRoute, updateVoiceRoute } from '../../calling/voice-route-stor
  * billable seconds were lost.
  *
  * The route's `revision` is bumped and a `connectedAt` is kept if one was
- * recorded, so the same event arriving twice (FreeSWITCH retries the hook on
- * a slow answer) is harmless.
+ * recorded, so redelivery from the durable SIP outbox is harmless.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (allowMobile(req, res)) return;

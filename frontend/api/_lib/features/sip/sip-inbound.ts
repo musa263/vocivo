@@ -68,12 +68,16 @@ export async function lookupSipInbound(
   const tenant = pbxForOrganization(config, organizationId);
   const directory = await directoryLookup.extensionsFor(organizationId);
 
-  let usernames: string[] = [];
-  if (assignment.destinationType === 'extension' && assignment.destinationId) {
-    usernames = await directoryLookup.usernamesForDestination(assignment.destinationId);
-  } else {
-    usernames = directory.filter((item) => item.status === 'active' && item.sipUsername).map((item) => item.sipUsername);
+  // The fallback may narrow routing, never broaden it. Complex destinations
+  // need the full XML plan to preserve member, schedule and fallback semantics.
+  if (['ring_group', 'queue', 'ivr'].includes(assignment.destinationType || '')) {
+    return { enabled: false, reason: 'requires_dialplan', organizationId, usernames: [], bridge: '' };
   }
+  const active = directory.filter((item) => item.organizationId === organizationId && item.status === 'active' && item.sipUsername);
+  const targets = assignment.destinationType === 'extension'
+    ? active.filter((item) => item.id === assignment.destinationId)
+    : active;
+  const usernames = targets.map((item) => item.sipUsername);
   const unique = [...new Set(usernames.filter(Boolean))];
   const bridge = unique.map((username) => `sofia/external/${username}@127.0.0.1:5060`).join(',');
 
@@ -81,7 +85,7 @@ export async function lookupSipInbound(
   // and takes a message. The edge hands the call to the receptionist service,
   // which transfers back into this same dialplan when the caller asks for a
   // person — so a receptionist can never reach somewhere a colleague could not.
-  if (tenant.ai?.enabled) {
+  if (tenant.ai?.enabled && assignment.destinationType !== 'extension') {
     return { enabled: true, organizationId, usernames: unique, bridge, action: 'ai' };
   }
 

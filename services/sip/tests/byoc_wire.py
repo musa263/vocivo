@@ -11,6 +11,7 @@ import struct
 import threading
 import time
 import uuid
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 
@@ -122,24 +123,63 @@ class Caller:
                 break
 
     def send(self, method, seq):
-        msg = f'{method} {self.target} SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1:{self.port};branch=z9hG4bK{uuid.uuid4().hex}\r\nMax-Forwards: 70\r\nFrom: {self.h["from"]}\r\nTo: {self.h["to"]}\r\nCall-ID: {self.cid}\r\nCSeq: {seq} {method}\r\nContent-Length: 0\r\n\r\n'
+        branch = self.cid if method == 'ACK' and self.code >= 300 else uuid.uuid4().hex
+        msg = f'{method} {self.target} SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1:{self.port};branch=z9hG4bK{branch}\r\nMax-Forwards: 70\r\nFrom: {self.h["from"]}\r\nTo: {self.h["to"]}\r\nCall-ID: {self.cid}\r\nCSeq: {seq} {method}\r\nContent-Length: 0\r\n\r\n'
         self.sip.sendto(msg.encode(), ('127.0.0.1', 15060))
+        return msg.encode()
 
     def audio(self):
         received = 0
         for seq in range(100):
+            started = time.monotonic()
             payload = b'\xf8\xff\xfe' if self.opus else b'\xd5' * 160
             self.rtp.sendto(struct.pack('!BBHII', 0x80, 102 if self.opus else 8, seq, seq * (960 if self.opus else 160), 12345) + payload, self.media)
             for ready in select.select([self.rtp], [], [], .02)[0]:
                 packet = ready.recv(2048)
                 received += (len(packet) > 12 and packet[1] & 127 == 102) if self.opus else packet[12:] == b'\xd5' * 160
+            # A fast loopback echo must not compress two seconds of RTP into
+            # a sub-second burst. Test both real pacing and billable duration.
+            time.sleep(max(0, .02 - (time.monotonic() - started)))
         return received
 
     def close(self):
         if self.code == 200:
-            self.send('BYE', 2)
+            packet = self.send('BYE', 2)
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                self.sip.settimeout(min(.5, max(.01, deadline - time.monotonic())))
+                try:
+                    message = self.sip.recv(65536).decode()
+                except socket.timeout:
+                    # UDP transactions retransmit the same branch and CSeq.
+                    self.sip.sendto(packet, ('127.0.0.1', 15060))
+                    continue
+                if headers(message).get('cseq') == '2 BYE':
+                    assert message.startswith('SIP/2.0 200 '), message.split('\r\n')[0]
+                    break
+            else:
+                raise AssertionError('BYE was not acknowledged')
         self.sip.close()
         self.rtp.close()
+
+
+def limit_usage(gateway):
+    with socket.create_connection(('127.0.0.1', 18021), timeout=3) as sock:
+        stream = sock.makefile('rb')
+        def frame():
+            fields = {}
+            while True:
+                line = stream.readline().decode().strip()
+                if not line: break
+                key, value = line.split(':', 1); fields[key.lower()] = value.strip()
+            return fields, stream.read(int(fields.get('content-length', '0'))).decode().strip()
+        frame()
+        sock.sendall(b'auth local-test-only\n\n')
+        reply, _ = frame()
+        assert reply.get('reply-text', '').startswith('+OK'), 'ESL fixture authentication failed'
+        sock.sendall(f'api limit_usage hash vocivo-carrier {gateway}\n\n'.encode())
+        _, body = frame()
+        return int(body.split('/')[0])
 
 
 threading.Thread(target=HTTPServer(('127.0.0.1', 18881), Api).serve_forever, daemon=True).start()
@@ -161,11 +201,23 @@ assert min(audio) > 30 and min(MEDIA) > 30, (audio, MEDIA)
 assert COUNTS == [1, 1] and not ERRORS, (COUNTS, ERRORS)
 for caller in [a, blocked, b, invalid]:
     caller.close()
-time.sleep(.3)
+deadline = time.monotonic() + 5
+while any(limit_usage(route['carrierGateway']) for route in ROUTES):
+    assert time.monotonic() < deadline, 'Carrier capacity did not release within five seconds after BYE'
+    time.sleep(.05)
+# Inspect actual hook output from the production generated XML and shell hook.
+# A route denied at capacity may also have a zero-duration record; each answered
+# tenant call must have its own positive duration and channel identity.
+deadline = time.monotonic() + 10
+while True:
+    jobs = [json.loads(path.read_text()) for path in Path('/spool/hangups').glob('*.json')]
+    if all(any(job['routeId'] == route['routeId'] and job['durationSeconds'] > 0 and job['eventId'] for job in jobs) for route in ROUTES): break
+    assert time.monotonic() < deadline, ('Answered hangup records lost their final duration', jobs)
+    time.sleep(.05)
 retry = Caller(0, opus=True)
 assert retry.code == 200, ('Opus-only caller could not reach the G.711 carrier after releasing capacity', retry.code)
 before = MEDIA[0]
 opus_audio = retry.audio()
 assert opus_audio > 30 and MEDIA[0] > before + 30, ('Opus/G.711 media did not cross the bridge', opus_audio, MEDIA[0] - before)
 retry.close()
-print(json.dumps({'tenantGateways': COUNTS, 'callerIdCorrect': not ERRORS, 'mediaEchoPackets': audio, 'carrierMediaPackets': MEDIA, 'capacityDenied': blocked.code, 'invalidGrantDenied': invalid.code, 'capacityReleased': True, 'opusToG711EchoPackets': opus_audio}))
+print(json.dumps({'tenantGateways': COUNTS, 'callerIdCorrect': not ERRORS, 'mediaEchoPackets': audio, 'carrierMediaPackets': MEDIA, 'capacityDenied': blocked.code, 'invalidGrantDenied': invalid.code, 'capacityReleased': True, 'hangupDurationPersisted': True, 'opusToG711EchoPackets': opus_audio}))
