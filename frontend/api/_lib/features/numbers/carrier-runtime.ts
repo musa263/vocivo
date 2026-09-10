@@ -63,7 +63,7 @@ export async function resolveCarrierOutbound(config: PbxConfig, organizationId: 
 }
 
 /** Managed provider sources are separate from tenant BYOC deployment sources. */
-export function managedCarrierSourceAllowed(sourceIp: string, raw = process.env.VOCIVO_MANAGED_TRUNK_SOURCES || '') {
+export function managedCarrierSourceAllowed(sourceIp: string, raw = process.env.VOCIVO_MANAGED_TRUNK_SOURCES || process.env.VOCIVO_PLATFORM_TRUNK_SOURCES || '') {
   if (isIP(sourceIp) !== 4) return false;
   const allowed = new BlockList();
   for (const source of raw.split(/[\s,]+/).filter(Boolean)) {
@@ -78,12 +78,41 @@ export function managedCarrierSourceAllowed(sourceIp: string, raw = process.env.
 }
 
 /** National DID aliases are considered only within the admitted carrier source. */
+/**
+ * The signalling addresses that belong to a tenant's own carrier, rather than
+ * to the platform's.
+ *
+ * Kamailio admits every address in VOCIVO_TRUNK_SOURCES, and that list now
+ * holds each tenant's BYOC carrier alongside the platform's, so "the edge let
+ * this INVITE in" no longer means "this INVITE came from our carrier". Anything
+ * a tenant deployment named is somebody's private trunk.
+ */
+function tenantCarrierSources(deployments: CarrierDeployment[]) {
+  return new Set(deployments.filter(item => !deploymentExpired(item)).flatMap(item => item.inboundSources));
+}
+
+/**
+ * Which of this platform's numbers the dialled digits mean, for a call arriving
+ * from `sourceIp`.
+ *
+ * National DID aliases are considered only within the admitted carrier source.
+ * A platform-assigned number used to be matched on the digits alone, which was
+ * safe only while every trusted address belonged to the platform's own carrier.
+ * It no longer does: one tenant's carrier could send an INVITE for another
+ * tenant's platform DID and reach that company's staff, receptionist and
+ * voicemail with a caller ID of its choosing. A number that is not served by a
+ * tenant trunk is therefore refused from every tenant trunk, and — where the
+ * platform's own signalling addresses have been configured — accepted only from
+ * those.
+ */
 export function resolveInboundNumber(config: PbxConfig, supplied: string, sourceIp: string, deployments = carrierDeployments()) {
   const digits = supplied.replace(/^\+/, '');
   if (!/^\d{5,15}$/.test(digits)) return '';
+  const fromTenantTrunk = tenantCarrierSources(deployments).has(sourceIp);
+
   const matches = Object.entries(config.numberAssignments).filter(([did, assignment]) => {
     if (assignment.disabled || !assignment.organizationId) return false;
-    if (assignment.source !== 'carrier') return assignment.source !== 'verified' && did === `+${digits}` && managedCarrierSourceAllowed(sourceIp);
+    if (assignment.source !== 'carrier') return !fromTenantTrunk && assignment.source !== 'verified' && did === `+${digits}` && managedCarrierSourceAllowed(sourceIp);
     if (!assignment.destinationType || (did !== `+${digits}` && assignment.inboundNumber !== digits)) return false;
     return deployments.some(item => !deploymentExpired(item) && item.organizationId === assignment.organizationId && item.trunkId === assignment.carrierTrunkId
       && item.revision === (assignment.carrierConnectionRevision || assignment.carrierTrunkRevision) && item.inboundSources.includes(sourceIp));

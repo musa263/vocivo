@@ -8,9 +8,11 @@ a number themselves; backend number routes enforce organization ownership.
 Validate external versus extension mode, an empty number list, and long country
 labels at mobile widths. Run frontend tests and build after changes.
 
-Company administration is BYOC-first: `admin/numbers/NumbersPage` shows the
-carrier form and previous company numbers, with an accessible removal modal.
-`CarrierTrunksPanel` publishes the inventory and edits individual destinations.
+Company administration is BYOC-first: `admin/numbers/NumbersPage` shows previous
+company numbers with an accessible removal modal, and links to SIP trunks for the
+carrier form. `CarrierTrunksPanel` lives on the SIP trunks section alone — two
+copies of it gave one trunk two revision counters — where it publishes the
+inventory and edits individual destinations.
 Every saved DID is visible even when unassigned or pending activation. Password
 fields are write-only; details show whether one is stored. Test with
 `node scripts/test-carrier-admin.mjs` using the Playwright module and Vite on 5191.

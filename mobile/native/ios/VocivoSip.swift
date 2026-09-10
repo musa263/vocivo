@@ -158,6 +158,12 @@ final class VocivoSip: RCTEventEmitter {
     resolve(nil)
   }
 
+  @objc(setRingtone:resolver:rejecter:)
+  func setRingtone(_ sound: NSString?, resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
+    VocivoSipCallManager.shared.setRingtone(sound as String?)
+    resolve(true)
+  }
+
   @objc(isCallUiAvailable:rejecter:)
   func isCallUiAvailable(_ resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
     resolve(true)

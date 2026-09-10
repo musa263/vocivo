@@ -74,6 +74,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let config = await readPbxConfig();
     let state = await readPlatformSaasState(config);
     const action = text(req.body?.action, 40);
+    // The verb has to agree with the action. Dispatching on the body alone
+    // meant a DELETE carrying action "save_company" created a customer, so any
+    // proxy rule, audit trail or log filter keyed on the method described
+    // something other than what happened.
+    if (action.startsWith('delete_') ? req.method !== 'DELETE' : req.method !== 'PUT') {
+      return res.status(405).json({ error: `${action.startsWith('delete_') ? 'Deleting' : 'Saving'} uses ${action.startsWith('delete_') ? 'DELETE' : 'PUT'}.` });
+    }
 
     if (action === 'save_company') {
       const input = req.body?.organization || {};
@@ -109,7 +116,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       };
       const newSettings = organizationSettingsFrom(defaultPbxConfig());
       newSettings.company = { ...newSettings.company, name, callingMode: 'carrier' };
-      config = await savePbxConfig({ organizations: [...config.organizations.filter((item) => item.id !== id), organization],
+      // Editing a customer must not move it: the order of this list is the
+      // order the console shows, and it used to decide which tenant owned the
+      // settings that predate multi-tenancy. An edit replaces the row in place.
+      const organizations = existing
+        ? config.organizations.map((item) => (item.id === id ? organization : item))
+        : [...config.organizations, organization];
+      config = await savePbxConfig({ organizations,
         ...(!existing ? { organizationSettings: { ...config.organizationSettings, [id]: newSettings } } : {}),
       }, { expectedUpdatedAt: config.updatedAt });
       state = await readPlatformSaasState(config);

@@ -62,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const deep = req.query.deep === '1';
       const storage = deep ? await storageHealth() : { provider: 'postgres', status: 'unchecked' };
       res.setHeader('Cache-Control', deep ? 'no-store' : 'public, s-maxage=5, stale-while-revalidate=30');
-      return res.status(200).json({ ok: true, service: 'vocivo-api', status: 'operational', storage, controlPlane: 'vocivo', mediaPlane: voiceEdge() === 'sip' ? 'vocivo-sip' : 'telnyx', telephonyStatus: 'unchecked', pstnProvider: 'telnyx', time: new Date().toISOString() });
+      return res.status(200).json({ ok: true, service: 'vocivo-api', status: 'operational', storage, controlPlane: 'vocivo', mediaPlane: voiceEdge() === 'sip' ? 'vocivo-sip' : 'telnyx', telephonyStatus: 'unchecked', pstnProvider: voiceEdge() === 'sip' ? 'tenant-configured' : 'telnyx', revision: process.env.VOCIVO_RELEASE_SHA || process.env.VERCEL_GIT_COMMIT_SHA || null, time: new Date().toISOString() });
     } catch (error) {
       console.error('Vocivo health check failed', error);
       return res.status(503).json({ ok: false, service: 'vocivo-api', status: 'unavailable', time: new Date().toISOString() });

@@ -52,6 +52,9 @@ export type PbxConfig = {
   ai: {
     enabled: boolean; assistantId: string; name: string; greeting: string; instructions: string; knowledge: string;
     voice: string; language: string; fallbackExtension: string; transferEnabled: boolean; summariesEnabled: boolean;
+    // When a company brief that used to be compiled into the platform was moved
+    // into this tenant's knowledge box. Set once, so an emptied box stays empty.
+    knowledgeSeededAt?: string;
   };
   system: { recordingEnabled: boolean; retentionDays: number; emergencyCallingEnabled: boolean };
   platform: {
@@ -77,7 +80,7 @@ function defaultWeekdays() {
 export function defaultPbxConfig(): PbxConfig {
   return {
     version: 2,
-    company: { name: 'Company', timezone: 'Asia/Riyadh', defaultCallerId: '', emergencyAddress: '' },
+    company: { name: 'Company', timezone: 'UTC', defaultCallerId: '', emergencyAddress: '' },
     activeOrganizationId: 'primary',
     organizations: [{ id: 'primary', name: 'Company', slug: 'company', accountType: 'business', ownerDisplayName: 'Company owner', ownerEmail: '', extensionStart: 2000, extensionEnd: 2019, internalCallingEnabled: true, status: 'active' }],
     numberAssignments: {},
@@ -86,7 +89,7 @@ export function defaultPbxConfig(): PbxConfig {
     userProfiles: {},
     departments: [{ id: 'general', name: 'General', managerExtension: '' }, { id: 'sales', name: 'Sales', managerExtension: '' }, { id: 'operations', name: 'Operations', managerExtension: '' }],
     outboundRules: [{ id: 'international', name: 'International calling', prefix: '+', extensionRange: '', numberLength: '', department: 'All', routes: ['Vocivo Managed'], enabled: true }],
-    officeHours: { timezone: 'Asia/Riyadh', weekdays: defaultWeekdays(), holidays: [] },
+    officeHours: { timezone: 'UTC', weekdays: defaultWeekdays(), holidays: [] },
     callHandling: { ringGroups: [], queues: [], ivrs: [] },
     ai: { enabled: false, assistantId: '', name: 'Company Receptionist', greeting: 'Welcome. How may I help you today?', instructions: 'You are a professional company receptionist. Answer questions using only the approved company information. Ask concise clarifying questions. If you cannot answer, offer to connect the caller to a colleague.', knowledge: '', voice: 'Telnyx.Bayan.Amanda', language: 'en', fallbackExtension: '2000', transferEnabled: true, summariesEnabled: true },
     system: { recordingEnabled: false, retentionDays: 30, emergencyCallingEnabled: false },

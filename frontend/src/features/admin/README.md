@@ -99,3 +99,10 @@ It exercises company admin and superadmin workflows, tenant filtering, distinct
 lines, shared routing, stale edits and narrow layouts. The carrier form regression
 remains `node scripts/test-carrier-admin.mjs`. Set `VOCIVO_TEST_ORIGIN` and
 `PLAYWRIGHT_MODULE` for the local environment.
+
+The overview uses published tenant carrier inventory for BYOC workspaces and
+never requests Telnyx inventory or balance for their SIP calling service. The
+platform settings display the configured calling engine/domain and APNs/FCM
+configuration. Missing subscription data stays unavailable; configured SIP does
+not imply measured socket/media health. Overview route tests cover disabled DID
+exclusion and absence of managed-carrier requests.

@@ -1,12 +1,15 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { api } from '../../shared/api';
 import type { CallerNumber, CallLog, CallRate, Profile } from '../../shared/types';
 import { fallbackRates } from '../billing/data/fallbackRates';
 import { setVoiceSignedIn, signOutVoiceDevice } from '../calling/runtime/voipClient';
+import { unregisterVocivoSip } from '../calling/runtime/sipNative';
 import { normalizeHistoryIdentity } from '../calling/engine/historyIdentity';
 import { clearSessionSnapshot, readSessionSnapshot, saveSessionSnapshot } from './sessionSnapshot';
+import { colors } from '../../shared/theme';
 
 type AuthContextValue = {
   loading: boolean;
@@ -88,7 +91,11 @@ function mergeHistory(local: CallLog[], server: CallLog[]) {
   for (const item of [...local, ...server].sort((a, b) => b.started_at.localeCompare(a.started_at))) {
     const digits = /^\+?[\d ().-]+$/.test(item.destination_number) ? item.destination_number.replace(/\D/g, '') : '';
     const started = new Date(item.started_at).getTime();
-    const duplicateIndex = result.findIndex((candidate) => candidate.id === item.id || Boolean(digits && /^\+?[\d ().-]+$/.test(candidate.destination_number) && candidate.direction === item.direction && candidate.destination_number.replace(/\D/g, '') === digits && Math.abs(new Date(candidate.started_at).getTime() - started) < 30_000));
+    // A row with no direction matches either way: older locally logged calls
+    // were written without one, and refusing to match them left every call in
+    // Recents twice once the server's copy arrived.
+    const sameDirection = (candidate: CallLog) => !candidate.direction || !item.direction || candidate.direction === item.direction;
+    const duplicateIndex = result.findIndex((candidate) => candidate.id === item.id || Boolean(digits && /^\+?[\d ().-]+$/.test(candidate.destination_number) && sameDirection(candidate) && candidate.destination_number.replace(/\D/g, '') === digits && Math.abs(new Date(candidate.started_at).getTime() - started) < 30_000));
     if (duplicateIndex < 0) {
       result.push(item);
     } else {
@@ -114,7 +121,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const historyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logFailure = (operation: string, failure: unknown) => console.warn(`[Vocivo Auth] ${operation}`, { name: failure instanceof Error ? failure.name : 'UnknownError' });
 
-  useEffect(() => {
+  // Named rather than inlined in the effect so the banner can offer a retry:
+  // this used to be rethrown from render, and the launch boundary's "try again"
+  // re-rendered the provider, which threw again with no way back into the app.
+  const syncNativeVoiceState = useCallback(() => {
     if (loading) return;
     setVoiceSignedIn(isAuthenticated)
       .then(() => setNativeBridgeError(null))
@@ -124,6 +134,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setNativeBridgeError(error);
       });
   }, [isAuthenticated, loading]);
+
+  useEffect(() => { syncNativeVoiceState(); }, [syncNativeVoiceState]);
 
   const refreshServerHistory = useCallback(async (userId: string, directory: DirectoryResponse['users']) => {
     const server = await api.get<HistoryResponse>('/api/voice/history');
@@ -263,6 +275,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loadAccount]);
 
   const signOut = useCallback(async () => {
+    // Both revocations have to reach the server while this session's bearer
+    // token still authenticates them, and both used to be started rather than
+    // awaited: the token was cleared underneath them, the SIP credential DELETE
+    // was skipped because the cached session no longer matched, and the local
+    // cache was then thrown away so it could never be retried. A seven-day
+    // Digest password stayed valid on Kamailio for a handset that had signed
+    // out, and the push registration went on ringing it.
+    await unregisterVocivoSip().catch((failure) => {
+      console.warn('[Vocivo Auth] SIP credential revocation failed', failure);
+    });
     await signOutVoiceDevice();
     ++authEpochRef.current;
     if (historyTimerRef.current) clearTimeout(historyTimerRef.current);
@@ -308,9 +330,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo(() => ({ loading, isAuthenticated, profile, rates, callerNumbers, history, signIn, enrollWithQr, signInWithPhone, signOut, refresh, addHistory, updateProfile }), [addHistory, callerNumbers, enrollWithQr, signInWithPhone, history, isAuthenticated, loading, profile, rates, refresh, signIn, signOut, updateProfile]);
-  if (nativeBridgeError) throw nativeBridgeError;
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  // Thrown from render, this reached the launch boundary, whose "Try again"
+  // re-rendered this provider — which threw the same error again, with no way
+  // out but force-quitting the app. The failure is worth saying out loud, but
+  // it is not worth the app: the rest of Vocivo works without the native
+  // calling bridge, so it is shown as something to retry or put aside.
+  return (
+    <AuthContext.Provider value={value}>
+      <View style={styles.host}>
+        {nativeBridgeError ? (
+          <View style={styles.banner}>
+            <Text style={styles.bannerTitle}>Calling could not be set up on this device</Text>
+            <Text style={styles.bannerBody}>{nativeBridgeError.message}</Text>
+            <View style={styles.bannerActions}>
+              <Pressable accessibilityLabel="Retry calling setup" onPress={syncNativeVoiceState} style={styles.bannerButton}>
+                <Text style={styles.bannerButtonText}>Try again</Text>
+              </Pressable>
+              <Pressable accessibilityLabel="Dismiss calling setup warning" onPress={() => setNativeBridgeError(null)} style={styles.bannerDismiss}>
+                <Text style={styles.bannerDismissText}>Dismiss</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+        {children}
+      </View>
+    </AuthContext.Provider>
+  );
 }
+
+const styles = StyleSheet.create({
+  host: { flex: 1 },
+  banner: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: colors.panelRaised, borderBottomWidth: 1, borderBottomColor: colors.coral },
+  bannerTitle: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  bannerBody: { color: colors.textMuted, fontSize: 12, lineHeight: 17, marginTop: 4 },
+  bannerActions: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
+  bannerButton: { height: 32, paddingHorizontal: 14, borderRadius: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.blue },
+  bannerButtonText: { color: colors.ink, fontSize: 12, fontWeight: '900' },
+  bannerDismiss: { height: 32, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  bannerDismissText: { color: colors.textMuted, fontSize: 12, fontWeight: '800' },
+});
 
 export function useAuth() {
   const value = useContext(AuthContext);

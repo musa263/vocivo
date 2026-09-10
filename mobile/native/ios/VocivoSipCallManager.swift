@@ -37,6 +37,7 @@ public final class VocivoSipCallManager: NSObject {
   private var ringback: AVAudioPlayer?
   private var ringbackCallId: String?
   private var audioActive = false
+  private var speakerOverride = false
   private var ringingDeadlines: [String: DispatchWorkItem] = [:]
 
   /// Events raised before JavaScript attached. A push wake is the reason this
@@ -45,20 +46,44 @@ public final class VocivoSipCallManager: NSObject {
   private var pending: [(String, [String: Any])] = []
   private let lock = NSLock()
 
+  /// The ringtone the user picked, as a file in the app bundle.
+  private var ringtoneSound = "vocivo_classic.wav"
+
   private override init() {
+    provider = CXProvider(configuration: VocivoSipCallManager.configuration(ringtone: "vocivo_classic.wav"))
+    super.init()
+    provider.setDelegate(self, queue: nil)
+  }
+
+  private static func configuration(ringtone: String?) -> CXProviderConfiguration {
     let configuration = CXProviderConfiguration(localizedName: "Vocivo")
     configuration.supportsVideo = false
-    configuration.maximumCallsPerCallGroup = 1
-    configuration.maximumCallGroups = 1
+    // Vocivo has call waiting, Add caller, Swap and Merge. Allowing one call
+    // per group meant the second leg never reached CallKit at all: when the
+    // first ended, `didDeactivate` turned WebRTC's audio off and the call that
+    // was still up went silent with nothing on screen to explain it.
+    configuration.maximumCallsPerCallGroup = 2
+    configuration.maximumCallGroups = 2
     configuration.supportedHandleTypes = [.phoneNumber, .generic]
     configuration.includesCallsInRecents = true
-    configuration.ringtoneSound = "vocivo_classic.wav"
+    configuration.ringtoneSound = ringtone
     if let icon = UIImage(named: "vocivo-icon") {
       configuration.iconTemplateImageData = icon.pngData()
     }
-    provider = CXProvider(configuration: configuration)
-    super.init()
-    provider.setDelegate(self, queue: nil)
+    return configuration
+  }
+
+  /// Applies the ringtone chosen in Vocivo's settings.
+  ///
+  /// A CallKit provider's ringtone lives in its configuration and nowhere else,
+  /// so changing it means handing the provider a new one. The settings screen
+  /// used to confirm a choice that never left JavaScript.
+  @objc public func setRingtone(_ sound: String?) {
+    let name = (sound ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    // "system" is the one choice that is not a bundled file: leaving the
+    // configuration's sound unset is what asks iOS for its own ringtone.
+    ringtoneSound = name.isEmpty || name == "system" ? "" : (name.hasSuffix(".wav") ? name : "\(name).wav")
+    provider.configuration = VocivoSipCallManager.configuration(ringtone: ringtoneSound.isEmpty ? nil : ringtoneSound)
   }
 
   // MARK: - Launch
@@ -66,6 +91,23 @@ public final class VocivoSipCallManager: NSObject {
   /// AppDelegate owns the sole PushKit registry and routes pushes by provider.
   @objc public func start() {
     // Initializing the singleton installs the CallKit provider delegate.
+    //
+    // Manual audio is the half of the CallKit contract this file was missing.
+    // WebRTC ignores `isAudioEnabled` unless it has been asked to honour it —
+    // otherwise it decides for itself when to build its audio unit and takes
+    // the audio session on its own, which for a CallKit call is the system's
+    // job alone. On a call delivered by VoIP push those two moments are seconds
+    // apart: the user answers from the lock screen and the SIP session that
+    // owns the tracks only exists once the app has registered and the INVITE
+    // has arrived. Whether the audio unit happened to be built against the
+    // session CallKit had activated therefore came down to timing, which is
+    // what "sometimes you cannot hear" was. With manual audio the flag set in
+    // `didActivate` is the only thing that starts audio, and WebRTC rebuilds
+    // the unit whenever permission and tracks coincide, in whichever order
+    // they arrive.
+    let session = RTCAudioSession.sharedInstance()
+    session.useManualAudio = true
+    session.isAudioEnabled = false
   }
 
   // MARK: - JavaScript attachment
@@ -112,6 +154,10 @@ public final class VocivoSipCallManager: NSObject {
     if ringbackCallId == callId { stopRingback() }
     guard let uuid = uuidsByCallId.removeValue(forKey: callId) else { return }
     callIdsByUuid.removeValue(forKey: uuid)
+    // The route belongs to the call, not to the app. CallKit configures a fresh
+    // session for the next one, so remembering the last call's loudspeaker
+    // would put a call nobody has answered yet onto it.
+    if uuidsByCallId.isEmpty { speakerOverride = false }
   }
 
   // MARK: - Reporting to CallKit
@@ -126,8 +172,10 @@ public final class VocivoSipCallManager: NSObject {
     update.hasVideo = false
     update.supportsHolding = true
     update.supportsDTMF = true
-    update.supportsGrouping = false
-    update.supportsUngrouping = false
+    // Merge and Swap are Vocivo features; refusing grouping here left the
+    // CallKit screen without the buttons for them.
+    update.supportsGrouping = true
+    update.supportsUngrouping = true
     let alreadyReported = uuidsByCallId[callId] != nil
     provider.reportNewIncomingCall(with: uuid(for: callId), update: update) { error in
       DispatchQueue.main.async {
@@ -152,9 +200,10 @@ public final class VocivoSipCallManager: NSObject {
     let uuid = uuid(for: callId)
     let action = CXStartCallAction(call: uuid, handle: CXHandle(type: .phoneNumber, value: handle))
     controller.request(CXTransaction(action: action)) { error in
-      if let error = error { NSLog("Vocivo: outgoing CallKit transaction failed: \(error.localizedDescription)") }
+      guard let error = error else { return }
+      NSLog("Vocivo: outgoing CallKit transaction failed: \(error.localizedDescription)")
+      DispatchQueue.main.async { self.claimAudioSessionWithoutCallKit() }
     }
-    provider.reportOutgoingCall(with: uuid, startedConnectingAt: nil)
   }
 
   @objc public func reportCallConnected(callId: String) {
@@ -168,7 +217,9 @@ public final class VocivoSipCallManager: NSObject {
       // An in-app Answer also needs a CallKit transaction to activate audio.
       // JS has already accepted SIP and will acknowledge this mirrored action.
       controller.request(CXTransaction(action: CXAnswerCallAction(call: uuid))) { error in
-        if let error = error { NSLog("Vocivo: in-app Answer transaction failed: \(error.localizedDescription)") }
+        guard let error = error else { return }
+        NSLog("Vocivo: in-app Answer transaction failed: \(error.localizedDescription)")
+        DispatchQueue.main.async { self.claimAudioSessionWithoutCallKit() }
       }
     }
   }
@@ -249,12 +300,58 @@ public final class VocivoSipCallManager: NSObject {
   }
 
   @objc public func setSpeaker(_ on: Bool) throws {
-    let session = AVAudioSession.sharedInstance()
+    // Remembered rather than applied and forgotten. CallKit hands over a newly
+    // configured session for every call and again after every interruption, and
+    // a port override survives neither, so a driver who had chosen the
+    // loudspeaker was quietly put back on the earpiece by a call that came in
+    // while the last one was still tidying up.
+    speakerOverride = on
+    guard audioActive else { return }
+    let session = RTCAudioSession.sharedInstance()
+    session.lockForConfiguration()
+    defer { session.unlockForConfiguration() }
+    // Through RTCAudioSession rather than AVAudioSession directly: WebRTC
+    // configures the same session under this lock while it builds its audio
+    // unit, and a route changed outside the lock races that.
     try session.overrideOutputAudioPort(on ? .speaker : .none)
+  }
+
+  private func applySpeakerRoute() {
+    guard speakerOverride else { return }
+    let session = RTCAudioSession.sharedInstance()
+    session.lockForConfiguration()
+    defer { session.unlockForConfiguration() }
+    do { try session.overrideOutputAudioPort(.speaker) }
+    catch { NSLog("Vocivo: could not restore the speaker route: \(error.localizedDescription)") }
+  }
+
+  /// Takes the audio session in the one case where CallKit never will.
+  ///
+  /// Under manual audio nothing is audible until `didActivate` grants it, and
+  /// CallKit only grants it for a transaction it accepted. A refused
+  /// transaction used to cost no more than a wrong-looking call screen; now it
+  /// would cost the call its audio entirely, so this is the single place the
+  /// app activates the session itself — by then there is no CallKit call left
+  /// to fight over it.
+  private func claimAudioSessionWithoutCallKit() {
+    configureAudioSession()
+    let session = RTCAudioSession.sharedInstance()
+    session.lockForConfiguration()
+    do { try session.setActive(true) }
+    catch { NSLog("Vocivo: could not take the audio session: \(error.localizedDescription)") }
+    session.isAudioEnabled = true
+    session.unlockForConfiguration()
+    audioActive = true
+    applySpeakerRoute()
+    playRingbackIfReady()
   }
 
   /// Voice-chat mode with Bluetooth allowed: the phone in a pocket, a headset
   /// in the ear and a van's hands-free kit are the normal cases for this app.
+  ///
+  /// Category and mode only. Activating the session here is CallKit's job, and
+  /// an app that does it for a CallKit call is competing with the system for
+  /// something the system is about to hand it anyway.
   private func configureAudioSession() {
     let session = RTCAudioSession.sharedInstance()
     session.lockForConfiguration()
@@ -341,6 +438,7 @@ extension VocivoSipCallManager: CXProviderDelegate {
     answeredCalls.removeAll()
     stopRingback()
     audioActive = false
+    speakerOverride = false
     RTCAudioSession.sharedInstance().isAudioEnabled = false
     uuidsByCallId.removeAll()
     callIdsByUuid.removeAll()
@@ -403,6 +501,16 @@ extension VocivoSipCallManager: CXProviderDelegate {
     // dialled call routes to the headset the way an incoming one does.
     configureAudioSession()
     action.fulfill()
+    // Only now does CallKit know the call exists. Reporting it straight after
+    // requesting the transaction — before this ran — was a no-op, so a dialled
+    // call sat at zero seconds on the system call screen and in Recents.
+    let update = CXCallUpdate()
+    update.supportsHolding = true
+    update.supportsDTMF = true
+    update.supportsGrouping = true
+    update.supportsUngrouping = true
+    provider.reportCall(with: action.callUUID, updated: update)
+    provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
   }
 
   public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
@@ -410,6 +518,10 @@ extension VocivoSipCallManager: CXProviderDelegate {
     rtc.audioSessionDidActivate(audioSession)
     rtc.isAudioEnabled = true
     audioActive = true
+    // The session CallKit has just handed over is a new one, so a loudspeaker
+    // the user chose before it existed — on the CallKit screen, while the
+    // INVITE for a pushed call was still on its way — has to be asked for again.
+    applySpeakerRoute()
     playRingbackIfReady()
     emit("callUiAudioSession", ["active": true])
   }
@@ -419,7 +531,14 @@ extension VocivoSipCallManager: CXProviderDelegate {
     ringback?.stop()
     ringback = nil
     let rtc = RTCAudioSession.sharedInstance()
-    rtc.isAudioEnabled = false
+    // CallKit deactivates the session as one leg of a two-call group ends, with
+    // the other still talking. Turning WebRTC's audio off on that signal alone
+    // is what left the surviving call silent, so it waits for the last call
+    // that actually has audio. A call that is merely ringing does not count:
+    // WebRTC only rebuilds its audio unit when this permission changes, so
+    // leaving it on across a gap where nothing is playing means the next
+    // `didActivate` changes nothing and the answered call comes up silent.
+    if connectedCalls.isEmpty { rtc.isAudioEnabled = false }
     rtc.audioSessionDidDeactivate(audioSession)
     emit("callUiAudioSession", ["active": false])
   }

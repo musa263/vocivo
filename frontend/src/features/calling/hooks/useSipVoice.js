@@ -7,6 +7,7 @@ import { SessionState } from 'sip.js';
 import { observeSipSession, terminateSipSession } from '../engine/sipCallLifecycle';
 import { monitorSipCall, restartSipMedia } from '../engine/sipCallHealth';
 import { attachSipMedia, connectSipUserAgent, inviteSipTarget, sipSessionId } from '../engine/sipSession';
+import { credentialRenewalDelayMs } from '../engine/sipCredentialRenewal';
 import { browserSipDeviceId, revokeBrowserSipCredential } from '../engine/sipDevice';
 import { describeIncoming } from '../engine/callIdentity.js';
 
@@ -245,11 +246,14 @@ export function useSipVoice(token, enabled, identity = {}) {
     const renew = () => {
       renewal = undefined;
       if (cancelled) return;
-      if (sessionRef.current || incomingRef.current || dialingRef.current) {
-        renewal = setTimeout(renew, 60_000);
+      const delay = credentialRenewalDelayMs({
+        onCall: Boolean(sessionRef.current || incomingRef.current || dialingRef.current),
+        connectionPending,
+      });
+      if (delay !== null) {
+        renewal = setTimeout(renew, delay);
         return;
       }
-      if (connectionPending) return;
       connectionPending = true;
       setCredentialEpoch((epoch) => epoch + 1);
     };
@@ -642,7 +646,7 @@ export function useSipVoice(token, enabled, identity = {}) {
     canHold: false,
     canAddCaller: false,
     canTransfer: false,
-    connected: mediaReady || state === 'held',
+    connected: mediaReady,
     incoming: Boolean(incomingCall),
     active: Boolean(call) && !incomingCall,
     notificationPermission,

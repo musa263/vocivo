@@ -160,6 +160,15 @@ export class SipVoiceClient implements VoiceClient {
         if (payload.state === 'failed' && payload.reason) {
           console.warn('Vocivo SIP registration failed', payload.reason);
         }
+        // A stop we asked for took its calls with it, so let go of them before
+        // announcing the disconnection. Publishing the two the other way round
+        // showed the UI a live call on a dead engine for long enough to report
+        // a deliberate sign-out as a transport failure.
+        if (payload.requested) {
+          this.calls.clear();
+          this.publishCalls();
+          this.activeCall$.next(null);
+        }
         this.connectionState$.next(state);
       }),
     );

@@ -210,3 +210,25 @@ test('removing the binding stops both directions', async () => {
   assert.deepEqual(nativeSeen, []);
   assert.deepEqual(bridgeSeen, []);
 });
+
+test('an Answer that beat the INVITE reports the call up before it completes the native action', async () => {
+  const h = harness();
+  // Model SIP.js faithfully: the 200 OK — and with it the peer connection and
+  // its tracks — exists before accept() resolves. The order matters on iOS,
+  // where CallKit has been showing this call since the push and the audio
+  // session it activates is only useful once those tracks are there.
+  h.bridge.answer = async (id: string) => {
+    h.bridgeSeen.push(`answer:${id}`);
+    h.events.emit('callState', { callId: id, state: 'ACTIVE' });
+  };
+  h.ui.press('callUiPushWake', { callId: 'c1' });
+  h.ui.press('callUiAnswer', { callId: 'c1' });
+  assert.deepEqual(h.bridgeSeen, [], 'there is no SIP session to accept until the INVITE arrives');
+  assert.deepEqual(h.nativeSeen, []);
+  h.events.emit('incoming', { callId: 'c1' });
+  await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(h.bridgeSeen, ['answer:c1']);
+  assert.deepEqual(h.nativeSeen, ['connected:c1', 'answer-completed:c1:true']);
+  assert.equal(h.timers.size, 0, 'both the INVITE deadline and the answer deadline are spent');
+  h.binding.remove();
+});

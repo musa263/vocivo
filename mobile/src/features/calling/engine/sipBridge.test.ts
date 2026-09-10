@@ -435,3 +435,26 @@ for (const phase of ['ringing', 'active', 'held'] as const) {
     await bridge.unregister();
   });
 }
+
+test('the loudspeaker one call ended on does not follow the next one', async () => {
+  const { bridge, fake, of } = harness();
+  await bridge.register(credentials);
+  await bridge.invite('1002');
+  const dialled = must(fake.outgoing[0], 'the dialled session');
+  dialled.move('Established');
+  await bridge.setSpeaker(true);
+  assert.equal(bridge.speakerOn, true);
+
+  const waiting = new FakeSession('in-1', true);
+  fake.ring(waiting);
+  dialled.move('Terminated');
+  assert.equal(bridge.speakerOn, true, 'a call still up keeps the route it is speaking on');
+
+  waiting.move('Terminated');
+  assert.equal(bridge.speakerOn, false, 'the system gives the next call an earpiece session, whatever this said last');
+  assert.equal(of('mediaState').at(-1)?.speaker, false, 'the call screen is told, or its Speaker button starts inverted');
+  assert.equal(fake.state.speaker, true, 'the platform is not touched: the OS has already taken the route back');
+
+  fake.ring(new FakeSession('in-2', true));
+  assert.equal(bridge.speakerOn, false);
+});

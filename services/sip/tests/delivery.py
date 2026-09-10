@@ -58,7 +58,7 @@ def delivery_config(source, *, suspended_baseline=False):
             if (is_method("REGISTER")) {
                 if (!save("location")) { sl_reply_error(); exit; }
                 route(RESUME_WAKE);
-                ts_append_by_contact("location", "$var(reg_aor)");
+                ts_append_by_contact("location", "$var(wake_key)");
                 exit;
             }
             if (is_method("INVITE")) {
@@ -184,6 +184,24 @@ def run_delivery_probes(*, suspended_baseline=False):
             raise AssertionError('Baseline unexpectedly forwarded 180; revisit the regression')
         answered_dialog(caller, callee, invitation)
         print('PASS registered receiver: 180, 200, ACK and BYE delivered', flush=True)
+
+        # A caller waiting on a sleeping phone used to hear silence for as long
+        # as the push, the app launch and the REGISTER took, while the callee's
+        # own screen was already ringing. Nothing is registered here and this
+        # fixture sends no push, so a 180 arriving now is the edge's own, sent
+        # while the transaction is suspended.
+        caller, callee = peer(), peer()
+        caller.request('INVITE', f'sip:{callee.user}@check')
+        caller.response('INVITE', 100)
+        early = headers(caller.response('INVITE', 180, timeout=2), 'To')[0]
+        assert ';tag=' in early, f'the early 180 opened no dialog: {early}'
+        assert early.split(';tag=')[1] != callee.user, 'the early 180 came from the receiver, not the edge'
+        callee.register()
+        invitation = callee.receive(lambda m: m.startswith('INVITE '))
+        # And the transaction still suspends and resumes around it: the
+        # receiver's own 180 and its answer both reach the caller afterwards.
+        answered_dialog(caller, callee, invitation)
+        print('PASS suspended call rings the caller before the device registers', flush=True)
 
         for delay in [9, 20, 40]:
             caller, callee = peer(), peer()

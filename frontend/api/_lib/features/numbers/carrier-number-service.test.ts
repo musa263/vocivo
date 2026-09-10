@@ -37,8 +37,9 @@ test('denies foreign trunks, cross-tenant claims and ambiguous trunks in one com
 test('removing a number leaves a tombstone and clears only its company default', () => {
   const config = defaultPbxConfig();
   config.company.defaultCallerId = '+12025550123';
-  config.numberAssignments = { '+12025550123': { organizationId: 'primary', source: 'owned', destinationType: 'main' },
-    '+442071230000': { organizationId: 'other', source: 'owned' } };
+  config.numberAssignments = { '+12025550123': { organizationId: 'primary', source: 'carrier', destinationType: 'main' },
+    '+442071230000': { organizationId: 'other', source: 'carrier' },
+    '+12025550199': { organizationId: 'primary', source: 'owned', destinationType: 'main' } };
   config.organizations.push({ ...config.organizations[0], id: 'other', slug: 'other' });
   const beforeOther = pbxForOrganization(config, 'other').company;
   const next = mergePbxConfig({ ...config, ...detachCompanyNumber(config, 'primary', '+12025550123') });
@@ -46,6 +47,11 @@ test('removing a number leaves a tombstone and clears only its company default',
   assert.equal(pbxForOrganization(next, 'primary').company.defaultCallerId, '');
   assert.deepEqual(pbxForOrganization(next, 'other').company, beforeOther);
   assert.throws(() => detachCompanyNumber(config, 'primary', '+442071230000'), /not found/);
+  // The carrier trunk screen removes DIDs the company brought with its own
+  // carrier. A number Vocivo provided is not one of those, and taking it off
+  // the air from here left a company with no way to put its main line back.
+  assert.throws(() => detachCompanyNumber(config, 'primary', '+12025550199', [], { carrierOnly: true }), /provided by Vocivo/);
+  assert.ok(detachCompanyNumber(config, 'primary', '+12025550199'), 'the phone numbers screen may still retire a Vocivo number');
 });
 
 test('republishing an edited trunk disables removed DIDs without touching another trunk', () => {

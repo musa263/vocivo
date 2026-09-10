@@ -7,7 +7,7 @@ import { ensureSipRegistration } from './runtime/sipNative';
 import { api } from '../../shared/api';
 import { pushEnvironment } from './runtime/pushEnvironment';
 import { loadIncomingRingtone } from './media/ringtone';
-import { persistVoiceSession, voipClient } from './runtime/voipClient';
+import { persistVoiceSession, rememberVoicePushDeviceId, voicePushDeviceId, voipClient, type VoiceDeviceRegistration } from './runtime/voipClient';
 import { CallState, ConnectionState, isTerminalVoiceCallState, type VoiceCall, type VoiceCallState, type VoiceConnectionState } from './engine/voiceEngine';
 import { voice } from './engine/voiceClientFacade';
 import { CallLifecycleRegistry, isSettledLocalHangupError, isTerminalCallState, transactCallWaiting } from './state/callLifecycle';
@@ -227,6 +227,12 @@ export function VoiceProvider({ children, bootstrapSession, onEngineSelected }: 
       total_cost: Number(totalCost.toFixed(4)),
       status: phase === 'ended' && Boolean(snapshot.connectedAt) ? 'completed' : snapshot.isIncoming ? 'missed' : 'no_answer',
       started_at: new Date(snapshot.startedAt).toISOString(),
+      // Every row the server sends carries a direction, and the merge matches on
+      // it. Logging this one without meant the same call could not recognise
+      // itself once it came back from the server, so every outbound call showed
+      // up twice in Recents after the first sync.
+      direction: snapshot.isIncoming ? 'incoming' as const : 'outgoing' as const,
+      internal: snapshot.destinationCountry === 'Internal',
     } as const;
 
     try {
@@ -462,6 +468,20 @@ export function VoiceProvider({ children, bootstrapSession, onEngineSelected }: 
     });
   }, [cancelRemoteRoute, cancelRoutePolling, clearCallSubscriptions, finalizeCall, reportVoiceError, stopRingback]);
 
+  /**
+   * Holds a call while the signalling is away, and closes it if it stays away.
+   *
+   * Media does not travel over the signalling socket, so a call already up
+   * survives losing it. Repeated failures cannot extend the original deadline.
+   */
+  const armSignallingGrace = useCallback((state: VoiceConnectionState) => {
+    if (transportLossTimerRef.current) return;
+    transportLossTimerRef.current = setTimeout(() => {
+      transportLossTimerRef.current = null;
+      if (voice.currentConnectionState !== ConnectionState.CONNECTED) emergencyTransportCleanup(state);
+    }, signallingReconnectGraceMs);
+  }, [emergencyTransportCleanup]);
+
   useEffect(() => {
     const connectionSubscription = voice.connectionState$.subscribe((state) => {
       setConnection(state);
@@ -487,22 +507,23 @@ export function VoiceProvider({ children, bootstrapSession, onEngineSelected }: 
       }
       if (state === ConnectionState.RECONNECTING) {
         // The signalling socket dropped and the stack is bringing it back.
-        // Media does not depend on it, so a call in progress stays up; only
-        // if the edge has not come back within the grace period is the call
-        // treated as lost.
-        // Repeated failures cannot extend the original recovery deadline.
-        if (transportLossTimerRef.current) return;
-        transportLossTimerRef.current = setTimeout(() => {
-          transportLossTimerRef.current = null;
-          if (voice.currentConnectionState !== ConnectionState.CONNECTED) emergencyTransportCleanup(ConnectionState.DISCONNECTED);
-        }, signallingReconnectGraceMs);
+        armSignallingGrace(ConnectionState.DISCONNECTED);
         return;
       }
-      if (state === ConnectionState.DISCONNECTED) {
-        const liveCount = voice.currentCalls.filter((call) => !isTerminalCall(call.currentState)).length;
-        if (isSetupSignalingBlip(liveCount, activeCallRef.current?.id)) return;
-      }
+      const liveCalls = voice.currentCalls.filter((call) => !isTerminalCall(call.currentState));
+      if (state === ConnectionState.DISCONNECTED && isSetupSignalingBlip(liveCalls.length, activeCallRef.current?.id)) return;
       if (state === ConnectionState.ERROR || state === ConnectionState.DISCONNECTED) {
+        // A registration that is refused for good — a 403 on one of the
+        // periodic re-REGISTERs, say — arrives here as ERROR rather than
+        // RECONNECTING, and used to close the call on the spot. The audio of a
+        // call already up owes nothing to that registration, so it is given the
+        // same grace: if the edge is still gone when the deadline passes, the
+        // call is treated as lost, and if it is not, the conversation carried on
+        // through a refusal the person never had to hear about.
+        if (liveCalls.length) {
+          armSignallingGrace(state);
+          return;
+        }
         emergencyTransportCleanup(state);
       }
     });
@@ -536,7 +557,7 @@ export function VoiceProvider({ children, bootstrapSession, onEngineSelected }: 
       clearCallSubscriptions();
       lifecycleRef.current.clear();
     };
-  }, [attachCall, clearCallSubscriptions, describeCall, emergencyTransportCleanup, reportVoiceError, retryRemoteCancellations]);
+  }, [armSignallingGrace, attachCall, clearCallSubscriptions, describeCall, emergencyTransportCleanup, reportVoiceError, retryRemoteCancellations]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -566,10 +587,13 @@ export function VoiceProvider({ children, bootstrapSession, onEngineSelected }: 
           setPushRegistration('unavailable');
           throw new Error('The device has not provided a calling push token. Allow notifications and try again.');
         }
-        await api.post('/api/voice/devices', {
+        const deviceId = await voicePushDeviceId();
+        const registration = await api.post<VoiceDeviceRegistration>('/api/voice/devices', {
           platform: Platform.OS === 'ios' ? 'ios' : 'android', token: pushToken,
           environment: pushEnvironment(NativeModules.VocivoSip?.pushEnvironment, __DEV__), bundleId: 'app.vocivo.mobile',
+          ...(deviceId ? { deviceId } : {}),
         });
+        await rememberVoicePushDeviceId(registration?.device?.id);
         setPushRegistration('registered');
         return;
       }
@@ -616,6 +640,17 @@ export function VoiceProvider({ children, bootstrapSession, onEngineSelected }: 
         if (monitor.cancelled) return;
         const sdkCall = voice.getCall(callId);
         const sdkIsLive = Boolean(sdkCall && isConnectedCall(sdkCall.currentState));
+        // On Vocivo's own edge nothing ever advances an outbound external route
+        // to 'connected': voice-progress is posted by the callee, and only on
+        // internal calls. The engine's own ACTIVE is the answer here. Waiting
+        // for the route instead let the poll run to its end about fifty-five
+        // seconds into a conversation that was already up, and told the caller
+        // that setting the call up was taking longer than expected.
+        if (sdkIsLive && voice.currentEngine === 'sip') {
+          cancelRoutePolling(callId);
+          stopRingback();
+          return;
+        }
         if (sdkIsLive && (result.phase === 'connected' || result.phase === 'ended' || result.phase === 'failed')) {
           cancelRoutePolling(callId);
           stopRingback();

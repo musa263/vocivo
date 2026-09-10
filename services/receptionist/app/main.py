@@ -32,6 +32,7 @@ async def serve() -> None:
 
     calls: set[asyncio.Task] = set()
     server = None
+    janitor: asyncio.Task | None = None
     loop = asyncio.get_running_loop()
     stopping = asyncio.Event()
     registered_signals = []
@@ -53,6 +54,9 @@ async def serve() -> None:
     try:
         log.info("warming the speech recogniser")
         await ears.warm()
+        # Rendered prompts accumulate on the same disk the switch runs on, so
+        # they are swept on a timer for as long as the service is up.
+        janitor = asyncio.create_task(voice.run_cache_janitor())
         server = await asyncio.start_server(on_connection, settings.listen_host, settings.listen_port)
         where = ", ".join(str(socket.getsockname()) for socket in server.sockets or [])
         log.info("receptionist listening for FreeSWITCH on %s", where)
@@ -62,6 +66,9 @@ async def serve() -> None:
         await stopping.wait()
     finally:
         stopping.set()
+        if janitor is not None:
+            janitor.cancel()
+            await asyncio.gather(janitor, return_exceptions=True)
         if server is not None:
             server.close()
             await server.wait_closed()

@@ -234,10 +234,14 @@ jobs:
           # already "frontend", so running this from inside frontend/ makes the CLI
           # resolve frontend/frontend and fail with "the provided path does not exist".
           npx --yes vercel@latest pull --yes --environment production --token "$VERCEL_TOKEN" >/dev/null
-          url=$(npx --yes vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" | tail -n 1)
+          url=$(npx --yes vercel@latest deploy --prod --yes --env "VOCIVO_RELEASE_SHA=$GITHUB_SHA" --token "$VERCEL_TOKEN" | tail -n 1)
           echo "deployed: $url"
           for attempt in 1 2 3 4 5 6; do
-            if curl --fail --silent --max-time 10 "${url%/}/api/health" >/dev/null; then echo "health: ok"; exit 0; fi
+            if curl --fail --silent --max-time 10 "${url%/}/api/health?deep=1" -o /tmp/release-health.json &&
+              node -e 'const h=require("/tmp/release-health.json");process.exit(h.ok===true && h.storage?.status==="available" && h.revision===process.env.GITHUB_SHA ? 0 : 1)'; then
+              echo "health: API, PostgreSQL and release revision verified"; exit 0
+            fi
             sleep $((attempt * 5))
           done
-          echo "::warning::deployment did not answer /api/health within the retry window"
+          echo "::error::deployment failed API, database or release revision verification"
+          exit 1

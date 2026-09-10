@@ -35,6 +35,10 @@ CANNED = {
     "transfer_unanswered": "Sorry about that — no one's picking up right now. I can take a message and have someone call you back, or is there anything else I can help with?",
     "still_here": "Take your time. I'm here if you need anything else.",
     "goodbye_idle": "I'll let you go now. Thanks for calling — goodbye.",
+    # Said when speech recognition keeps failing and there is nobody to put the
+    # caller through to. It stays on the line: the caller decides when to end
+    # the call, so this offers a way forward rather than a farewell.
+    "hearing_trouble": "I'm sorry, I'm having trouble hearing you. The line may be poor. Please try again, or call back in a moment.",
 }
 
 # Said while the language model and the voice engine work on the real answer:
@@ -132,6 +136,66 @@ class Voice:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    def evict_stale_prompts(self) -> None:
+        """
+        Keeps the prompt cache inside its age and its size.
+
+        A receptionist's canned lines repay caching many times over, but the
+        model's answers are unique to the call that produced them, so the cache
+        is not self-limiting: it grows for as long as the service runs. This
+        volume sits on the droplet that also carries Kamailio, FreeSWITCH,
+        rtpengine and coturn, so a full disk is a telephony outage, not a
+        degraded assistant.
+
+        Anything older than the age limit goes; if what remains is still over
+        the size limit, the oldest go until it is not. A prompt that is still in
+        use is simply rendered again the next time it is asked for.
+
+        Best-effort throughout: no call may ever fail because a sweep did.
+        """
+        cutoff = time.time() - self._settings.prompt_cache_seconds
+        limit = self._settings.prompt_cache_max_bytes
+        try:
+            entries: list[tuple[float, int, Path]] = []
+            for entry in self._dir.iterdir():
+                if entry.suffix != ".wav" or not entry.is_file():
+                    continue
+                try:
+                    stat = entry.stat()
+                except OSError:
+                    continue
+                if stat.st_mtime < cutoff:
+                    entry.unlink(missing_ok=True)
+                    continue
+                entries.append((stat.st_mtime, stat.st_size, entry))
+            total = sum(size for _, size, _ in entries)
+            if total <= limit:
+                return
+            for _, size, entry in sorted(entries):
+                if total <= limit:
+                    break
+                entry.unlink(missing_ok=True)
+                total -= size
+        except OSError:
+            log.warning("prompt cache sweep did not finish", exc_info=True)
+
+    async def run_cache_janitor(self) -> None:
+        """
+        Sweeps the prompt cache on a timer, off the path a caller waits on.
+
+        A sweep stats every file in the directory, which is not work to do
+        between a caller's question and their answer, so it runs in a worker
+        thread on its own schedule.
+        """
+        while True:
+            try:
+                await asyncio.to_thread(self.evict_stale_prompts)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - a janitor must not take the service down
+                log.exception("prompt cache sweep failed")
+            await asyncio.sleep(self._settings.prompt_cache_sweep_seconds)
 
     def _path_for(self, text: str, voice: str) -> Path:
         digest = hashlib.sha256(f"{voice}\n{text}".encode("utf-8")).hexdigest()[:32]
@@ -238,7 +302,13 @@ class Ears:
         self._settings = settings
         self._model = None
         self._lock = asyncio.Lock()
-        self._inference_gate = asyncio.Semaphore(1)
+        # One slot meant the receptionist could serve exactly one caller at a
+        # time: a second caller's turn queued behind the first, and a third
+        # exceeded the admission timeout and was counted as a recognition
+        # failure — three of which used to end the call. The gate exists to keep
+        # inference off the event loop and within the container's CPU share, so
+        # it is sized from that share rather than pinned at one.
+        self._inference_gate = asyncio.Semaphore(settings.stt_concurrency)
         self._inference_tasks: set[asyncio.Task] = set()
 
     async def _load(self):
@@ -297,7 +367,10 @@ class Ears:
             return " ".join(segment.text.strip() for segment in segments).strip()
 
         try:
-            await asyncio.wait_for(self._inference_gate.acquire(), timeout=5)
+            # Waiting for a free slot is backpressure, not a recognition
+            # failure, so it is given room to clear rather than counted against
+            # the caller. The per-inference timeout below still bounds the turn.
+            await asyncio.wait_for(self._inference_gate.acquire(), timeout=self._settings.stt_queue_seconds)
             # Cancelling an asyncio waiter cannot stop native inference. Keep
             # the slot until the actual worker exits, and give it owned bytes
             # so deleting the temporary WAV cannot race decoding.

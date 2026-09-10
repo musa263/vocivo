@@ -191,19 +191,19 @@ class Sweep(unittest.IsolatedAsyncioTestCase):
                 await handler._with_interruption(connection, AsyncMock(side_effect=SpeechSynthesisError('voice unavailable')))
 
     async def test_api_outage_is_not_an_authoritative_absent_receptionist(self):
-        from app.api import VocivoApi, ReceptionistUnavailable
+        from app.api import VocivoApi, AssistantUnavailable
         api = VocivoApi(Settings())
         await api._client.aclose()
         api._client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(503)))
         try:
-            with self.assertRaises(ReceptionistUnavailable):
+            with self.assertRaises(AssistantUnavailable):
                 await api.assistant_for('fixture', 'fixture')
         finally:
             await api.close()
         connection = Mock(uuid='fixture', hungup=asyncio.Event())
         connection.connect = AsyncMock(return_value={'variable_vocivo_org':'tenant-a', 'variable_vocivo_did':'+12025550123'})
         connection.set, connection.execute, connection.hangup, connection.close = AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
-        handler = CallHandler(Settings(), None, None, None, Mock(assistant_for=AsyncMock(side_effect=ReceptionistUnavailable())))
+        handler = CallHandler(Settings(), None, None, None, Mock(assistant_for=AsyncMock(side_effect=AssistantUnavailable())))
         await handler.handle(connection)
         connection.set.assert_any_await('vocivo_from_receptionist', '0')
         connection.set.assert_any_await('vocivo_stage', 'unavailable')

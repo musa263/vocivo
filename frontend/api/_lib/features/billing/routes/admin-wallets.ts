@@ -99,6 +99,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === 'GET') return res.status(200).json(await responseFor());
 
     const action = text(req.body?.action, 40);
+    // The verb has to agree with the action, or a DELETE carrying
+    // "adjust_wallet" moves money while every method-based rule and audit line
+    // reads as a deletion.
+    if (action.startsWith('delete_') ? req.method !== 'DELETE' : req.method !== 'PUT') {
+      return res.status(405).json({ error: `${action.startsWith('delete_') ? 'Deleting' : 'Saving'} uses ${action.startsWith('delete_') ? 'DELETE' : 'PUT'}.` });
+    }
     const config = await readPbxConfig();
     if (action === 'adjust_wallet') {
       const organizationId = text(req.body?.organizationId, 80);
@@ -110,6 +116,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (type === 'manual_debit' || type === 'chargeback' ? direction !== 'debit' : direction !== 'credit') throw new Error('Wallet entry direction does not match its type.');
       const reference = text(req.body?.reference, 120);
       if (['topup', 'refund', 'chargeback'].includes(type) && !reference) throw new Error('A payment or transaction reference is required.');
+      // The caller supplies this or the request is refused. Minting one here
+      // meant a double-clicked "credit $250", or a browser retrying a request
+      // that had timed out, arrived as two different keys and credited the
+      // customer twice — the wallet store implements idempotency properly, and
+      // this was the one line that opted out of it.
+      const idempotencyKey = text(req.body?.idempotencyKey, 120);
+      if (!idempotencyKey) return res.status(400).json({ error: 'An idempotency key is required so a retried adjustment cannot be applied twice.' });
       await recordWalletAdjustment({
         organizationId,
         type,
@@ -118,7 +131,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         reference,
         description: text(req.body?.description, 300),
         createdBy: access.session.email || access.session.sub || 'vocivo-superadmin',
-        idempotencyKey: text(req.body?.idempotencyKey, 120) || randomUUID(),
+        idempotencyKey,
       });
     } else if (action === 'save_wallet') {
       const organizationId = text(req.body?.wallet?.organizationId, 80);

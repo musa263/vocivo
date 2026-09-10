@@ -126,3 +126,36 @@ items; no new live exposure or device failure was claimed or induced here.
 The current production FreeSWITCH pin therefore remains an upgrade task even
 though the 1.11.3 candidate is locally compatible. Keep these remaining gates
 visible instead of describing the whole live PBX as fully repaired.
+
+## Consolidated release follow-up
+
+The release merges `97d4ed6` (including `937e9a9` and `28a3350`) with the
+repairs above. That preserves the newer native audio, tenant isolation,
+receptionist resilience, RTPEngine digest pin and randomized ESL credential
+changes. Embedded Global Heritage knowledge was removed by that merged work;
+customer knowledge is supplied through tenant configuration.
+
+The production-path placeholder scan found misleading admin infrastructure
+and subscription defaults. The overview now uses published BYOC inventory,
+shows the configured voice engine/domain, does not require Telnyx for a SIP/BYOC
+overview, and represents unmeasured availability/missing subscriptions honestly.
+The retired toll-free number was removed from the admin input hint. Normal form
+instructions, configuration templates and isolated test fixtures remain required.
+No dummy runtime response or simulated call success was introduced.
+
+The Vercel release gate now requires PostgreSQL health and the expected commit
+revision. SIP synchronization checks idle PBX/media state, backs up private
+spools, migrates container-local data to named volumes, and starts FreeSWITCH
+before reopening Kamailio. Legacy `.failed` audio remains preserved for explicit
+reconciliation. Readiness claims still require actual carrier and device calls.
+
+Validation after merging: 535 backend/web tests, 159 mobile unit tests, 102 mounted
+mobile tests, 91 receptionist tests, 20 SIP/rollout unit tests; full root typecheck
+and build gate passed. Docker validated the production parser, REGISTER wake and
+late-contact branches, 47-second PBX ringing, ACK/UPDATE/BYE, tenant call-record
+isolation, media failure suppression, BYOC audio/transcoding/capacity/final billing
+duration, local speech/recording, and durable retry after HTTP failure/container
+recreation. Browser checks covered SIP lifecycle, company-admin/superadmin number
+assignments, and two-tab tenant isolation. Production deployment evidence is
+recorded by the release workflows; these local results do not certify live Go
+Telecom or physical mobile acceptance.

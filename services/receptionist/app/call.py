@@ -8,7 +8,7 @@ import wave
 from uuid import uuid4
 from pathlib import Path
 
-from .api import VocivoApi, ReceptionistUnavailable
+from .api import VocivoApi, AssistantUnavailable
 from .brain import Assistant, Brain, Conversation, Decision
 from .config import Settings
 from .esl import EslConnection, EslProtocolError, channel_variable
@@ -59,7 +59,7 @@ class CallHandler:
 
         try:
             assistant = await self._api.assistant_for(dialled, caller)
-        except ReceptionistUnavailable:
+        except AssistantUnavailable:
             # Only a call already assigned by the PBX can return to its
             # unavailable stage. Never invent a tenant or transfer target.
             organization = channel_variable(channel, "variable_vocivo_org", "vocivo_org")
@@ -163,10 +163,16 @@ class CallHandler:
                                 await self._transfer(connection, assistant.fallback_extension, dialled)
                                 transferred_to = assistant.fallback_extension
                                 outcome = "transferred"
-                            else:
-                                outcome = "error"
-                                await connection.hangup()
-                            break
+                                break
+                            # Nobody to put them through to, and we still cannot
+                            # hear them. Say so and keep listening: the caller
+                            # decides when this call is over, not the software.
+                            # If they have truly gone, the idle deadline ends it
+                            # with a goodbye.
+                            outcome = "error"
+                            recognition_failures = 0
+                            await self._speak(connection, CANNED["hearing_trouble"], assistant.voice)
+                            continue
                         silent_turns = 0
                         await self._speak(connection, "Sorry, I couldn't process that. Could you repeat that, please?", assistant.voice)
                         continue
@@ -239,6 +245,10 @@ class CallHandler:
             finally:
                 await asyncio.wait_for(connection.hangup(), timeout=3)
         except SpeechSynthesisError:
+            # The receptionist has lost its voice. It cannot apologise, so the
+            # caller must reach a person: transfer if there is one, otherwise
+            # close the socket and let the dialplan ring the staff. Hanging up
+            # would leave the caller with a dead line and no explanation.
             outcome = "error"
             allowed = {target.extension for target in assistant.targets}
             if assistant.office_open and assistant.transfer_enabled and assistant.fallback_extension in allowed:
@@ -247,10 +257,9 @@ class CallHandler:
                     transferred_to = assistant.fallback_extension
                     outcome = "transferred"
                 except Exception:
-                    log.exception("call %s voice failure fallback failed", call_id[:8])
-                    await connection.hangup()
+                    log.exception("call %s voice failure fallback failed; leaving the call to the dialplan", call_id[:8])
             else:
-                await connection.hangup()
+                log.warning("call %s has no voice and nobody to transfer to; leaving the call to the dialplan", call_id[:8])
         except asyncio.CancelledError:
             outcome = "caller_hung_up" if connection.hungup.is_set() else "error"
             raise
@@ -262,12 +271,11 @@ class CallHandler:
                 outcome = "error"
                 await self._release(connection)
         except Exception as error:  # noqa: BLE001 - never leave a caller on a dead line
-            log.exception("call %s failed: %s", call_id[:8], error)
+            # Something we did not anticipate. The caller is still on the line
+            # and has done nothing wrong, so the call goes back to the dialplan
+            # to ring the staff rather than being hung up on.
+            log.exception("call %s failed: %s; leaving the call to the dialplan", call_id[:8], error)
             outcome = "error"
-            try:
-                await connection.hangup()
-            except Exception:  # noqa: BLE001
-                log.exception("call %s could not be terminated after failure", call_id[:8])
         finally:
             prerender.cancel()
             await asyncio.gather(prerender, return_exceptions=True)
@@ -461,10 +469,21 @@ class CallHandler:
             try:
                 if not connection.hungup.is_set():
                     await asyncio.wait_for(connection.api(f"uuid_record {connection.uuid} stop {path}"), 5)
-            except Exception as error:
-                # Cleanup must not replace a speech/model failure and suppress
-                # its tenant-approved fallback. Cancellation still propagates.
-                log.warning("interruption recorder cleanup failed (%s)", type(error).__name__)
+                    # Put the buffering back the way it was found. It was turned
+                    # off above only so this capture would see short frames, but
+                    # it is a channel variable: left off it also applied to
+                    # every turn recording _listen made for the rest of the call.
+                    # An empty value unsets it, which is what the recorder wants
+                    # when nobody has asked for anything in particular.
+                    await asyncio.wait_for(connection.set("enable_file_write_buffering", ""), 5)
+            except Exception:  # noqa: BLE001 - tidying up must not replace what went wrong
+                # This runs while an exception may already be on its way out,
+                # and on a socket that failure has often poisoned. Raising here
+                # substituted an EslProtocolError for it — turning a
+                # SpeechSynthesisError, which has a transfer-to-a-person
+                # recovery, into one that only logs and releases the call, so a
+                # caller who should have been put through was dropped instead.
+                log.warning("call %s could not stop the interruption capture", connection.uuid[:8])
             finally:
                 self._discard(path)
 

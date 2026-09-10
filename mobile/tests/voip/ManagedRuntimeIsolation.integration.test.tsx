@@ -19,6 +19,7 @@ jest.mock('react-native', () => ({
     voipPushToken: jest.fn(async () => 'native-push-token'),
     firebasePushToken: jest.fn(async () => 'vocivo-fcm-token'),
     setVoiceSignedIn: jest.fn(async () => true),
+    setRingtone: jest.fn(async () => true),
   }, VoicePnBridge: {
     getVoipToken: jest.fn(async () => 'native-push-token'),
     setIncomingCallRingtone: jest.fn(async () => true),
@@ -30,7 +31,7 @@ jest.mock('react-native', () => ({
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true, default: { setItem: jest.fn(), multiRemove: jest.fn() },
 }));
-jest.mock('expo-secure-store', () => ({ deleteItemAsync: jest.fn() }));
+jest.mock('expo-secure-store', () => ({ getItemAsync: jest.fn(async () => null), setItemAsync: jest.fn(async () => undefined), deleteItemAsync: jest.fn() }));
 
 import { getVoicePushToken, setVoiceSignedIn, signOutVoiceDevice } from '../../src/features/calling/runtime/voipClient';
 import { VoicePnBridge } from '../../src/features/calling/runtime/nativeVoiceBridge';

@@ -44,7 +44,7 @@ class VocivoConnectionService : ConnectionService() {
     connection.setAddress(request.address, TelecomManager.PRESENTATION_ALLOWED)
     request.extras?.getString(EXTRA_CALLER_NAME)?.let { connection.setCallerDisplayName(it, TelecomManager.PRESENTATION_ALLOWED) }
     connection.setExtras(request.extras)
-    VocivoSipCallRegistry.register(callId, connection)
+    VocivoSipCallRegistry.register(applicationContext, callId, connection)
     if (connection.state == Connection.STATE_DISCONNECTED) return connection
     if (incoming) connection.markRinging() else connection.markDialing()
     return connection

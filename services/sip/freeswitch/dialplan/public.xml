@@ -27,30 +27,39 @@
         <action application="hangup" data="CALL_REJECTED"/>
       </condition>
     </extension>
-    <extension name="vocivo-telnyx-registered-client">
-      <condition field="destination_number" expression="^(?!conf-|vocivo-)([A-Za-z][A-Za-z0-9_.-]{2,80})$">
-        <action application="set" data="hangup_after_bridge=true"/>
-        <action application="set" data="inherit_codec=true"/>
-        <action application="set" data="origination_caller_id_name=${caller_id_name}"/>
-        <action application="set" data="origination_caller_id_number=${caller_id_number}"/>
-        <action application="bridge" data="sofia/gateway/telnyx/${destination_number}@sip.telnyx.com"/>
-      </condition>
-    </extension>
+    <!-- There was an extension here that bridged any alphabetic destination to
+         the platform Telnyx gateway. Nothing could reach it — Kamailio forks
+         only E.164 to this profile, and the two destinations the API and the
+         receptionist transfer into this context are the DID and
+         vocivo-inbound-result, which its own pattern excluded — and if
+         anything ever had, it would have put one tenant's call on the
+         platform's carrier account, which is the thing the extension above
+         exists to refuse. -->
     <!-- Inbound over the trunk. Kamailio tags what it accepted from the
          carrier with X-Vocivo-Flow: inbound. The API normally renders the
          whole plan for these calls through mod_xml_curl (see
          autoload_configs/xml_curl.conf.xml), and this static plan is only
          reached when that binding gave no answer: it asks the API for a
          routing decision once and executes it. mod_curl splits its arguments
-         on spaces and honours single quotes, so the header and the body are
-         quoted; the response body lands in curl_response_data as-is. -->
+         on spaces and honours single quotes, so the body is quoted; the
+         response body lands in curl_response_data as-is.
+
+         The lookup goes to the local nginx edge proxy, which holds the edge
+         secret and adds it, rather than to the API with an Authorization
+         header of our own. FreeSWITCH logs every application it runs with its
+         arguments already expanded, so a secret in this line was printed into
+         freeswitch.log on every inbound call — and the logs ops action greps
+         those EXECUTE lines and ships them into a workflow log. The proxy is
+         the same one Kamailio has always needed for /sip-auth, so it is
+         already there; Ops · Droplets → sync-config adds the /sip-inbound
+         location to it when it is missing. -->
     <extension name="vocivo-inbound-did">
       <condition field="${sip_h_X-Vocivo-Flow}" expression="^inbound$"/>
       <condition field="destination_number" expression="^\+?([1-9]\d{6,14})$">
         <action application="set" data="vocivo_did=+$1"/>
         <action application="set" data="curl_timeout=8"/>
         <action application="set" data="curl_connect_timeout=5"/>
-        <action application="curl" data="$${VOCIVO_API_URL}/api/voice/sip-inbound content-type application/json append_headers 'Authorization: Basic $${SIP_EDGE_BASIC}' post '{&quot;to&quot;:&quot;${vocivo_did}&quot;,&quot;carrierSourceIp&quot;:&quot;${sip_h_X-Vocivo-Carrier-Source}&quot;}'"/>
+        <action application="curl" data="http://127.0.0.1:8081/sip-inbound content-type application/json post '{&quot;to&quot;:&quot;${vocivo_did}&quot;,&quot;carrierSourceIp&quot;:&quot;${sip_h_X-Vocivo-Carrier-Source}&quot;}'"/>
         <action application="log" data="INFO Vocivo inbound lookup ${curl_response_code} ${curl_response_data}"/>
         <action application="transfer" data="vocivo-inbound-result XML public"/>
       </condition>
@@ -65,15 +74,51 @@
         <action application="hangup" data="NORMAL_CLEARING"/>
       </condition>
     </extension>
+    <!-- The receptionist asking for a person. It transfers the call back into
+         this context with vocivo_stage=ext-select (services/receptionist/app/
+         call.py), which the API's rendered plan answers by ringing that
+         extension. Here there is no per-extension plan, so the caller is rung
+         through on the same staff bridge the fallback below uses. Without
+         this the transfer re-entered vocivo-inbound-did, came back to
+         vocivo-inbound-result and matched the receptionist again: a caller who
+         asked for a person heard the greeting forever, and each pass opened
+         another Event Socket. -->
+    <extension name="vocivo-inbound-from-receptionist">
+      <condition field="destination_number" expression="^vocivo-inbound-result$"/>
+      <condition field="${vocivo_stage}" expression="^ext-select$"/>
+      <condition field="${curl_response_data}" expression="&quot;bridge&quot;\s*:\s*&quot;sofia/">
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="set" data="call_timeout=30"/>
+        <action application="bridge" data="${regex(${curl_response_data}|&quot;bridge&quot;\s*:\s*&quot;([^&quot;]+)&quot;|%1)}"/>
+        <action application="answer"/>
+        <action application="speak" data="flite|kal|No one is available to take your call right now. Please try again later."/>
+        <action application="hangup" data="NORMAL_CLEARING"/>
+      </condition>
+    </extension>
+    <extension name="vocivo-inbound-from-receptionist-closed">
+      <condition field="destination_number" expression="^vocivo-inbound-result$"/>
+      <condition field="${vocivo_stage}" expression="^ext-select$">
+        <action application="answer"/>
+        <action application="sleep" data="400"/>
+        <action application="speak" data="flite|kal|No one is available to take your call right now. Please try again later."/>
+        <action application="hangup" data="NORMAL_CLEARING"/>
+      </condition>
+    </extension>
     <!-- Vocivo's own receptionist. `socket` hands the call to the service on
          this droplet, which answers, listens, thinks and speaks with our own
          speech recognition and voice, and transfers back into this dialplan
          when the caller asks for a person. The actions after it run only when
          that service could not be reached: the call then rings the staff the
-         API listed, and is told the business is unavailable if there are none. -->
+         API listed, and is told the business is unavailable if there are none.
+
+         A call that has already been with the receptionist never comes back
+         here, whatever stage it carries: handing it to the socket a second
+         time is the loop described above. -->
     <extension name="vocivo-inbound-ai">
       <condition field="destination_number" expression="^vocivo-inbound-result$"/>
       <condition field="${vocivo_ai_unavailable}" expression="^$"/>
+      <condition field="${vocivo_from_receptionist}" expression="^$"/>
       <condition field="${curl_response_data}" expression="&quot;action&quot;\s*:\s*&quot;ai&quot;">
         <action application="socket" data="127.0.0.1:8084 async full"/>
         <action application="log" data="WARNING Vocivo receptionist did not answer; ringing the staff instead"/>

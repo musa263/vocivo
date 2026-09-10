@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requireSession } from '../../auth/auth.js';
+import { isPlatformOwnerSession, requireSession } from '../../auth/auth.js';
 import { allowMobile, methodNotAllowed, publicError, writeAuthError, requiredEnv } from '../../../shared/http.js';
 import { telnyx, telnyxPstnConnectionId } from '../../../shared/telnyx.js';
 import { readPbxConfig } from '../../organizations/pbx-config-store.js';
@@ -27,7 +27,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const session = await requireSession(req);
     const config = await readPbxConfig();
-    const organizationId = session.sub === 'vocivo-owner' ? '' : sessionOrganizationId(session, config);
+    // A superadmin works in one customer at a time, the same way every
+    // /api/admin route resolves them. Reading the platform owner as "no
+    // organization" made this list every customer's numbers mixed together in
+    // the caller-ID picker, with no way to tell whose was whose.
+    const organizationId = isPlatformOwnerSession(session) ? config.activeOrganizationId : sessionOrganizationId(session, config);
     res.setHeader('Cache-Control', 'private, no-store');
     if (organizationId && carrierMode(config, organizationId)) {
       const trunks = await carrierTrunks.list(organizationId);

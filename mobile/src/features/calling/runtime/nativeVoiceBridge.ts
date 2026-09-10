@@ -6,6 +6,8 @@ type VocivoControls = {
   voipPushToken(): Promise<string | null>;
   firebasePushToken(): Promise<string | null>;
   setVoiceSignedIn(value: boolean): Promise<boolean>;
+  /** iOS: rebuilds the CallKit provider around the chosen ringtone. */
+  setRingtone?(value: string): Promise<boolean>;
 };
 function vocivo(): VocivoControls {
   const native = NativeModules.VocivoSip as VocivoControls | undefined;
@@ -33,10 +35,16 @@ export const VoicePnBridge = {
   getVoipToken: async () => Platform.OS === 'ios' ? vocivo().voipPushToken() : null,
   getFirebaseToken: async () => Platform.OS === 'android' ? vocivo().firebasePushToken() : null,
   clearManagedSession: () => bridge().setVocivoVoiceSignedIn(false),
-  // Preserve the installed SDK's Android-only contract. The iOS implementation
-  // initializes the managed CallKit manager and must not run on SIP startup.
-  setIncomingCallRingtone: async (value: string) => Platform.OS === 'android'
-    ? bridge().setIncomingCallRingtone(value) : true,
+  // Android keeps the installed SDK's contract; iOS goes to Vocivo's own CallKit
+  // provider, whose configuration is where a ringtone lives. This used to answer
+  // `true` on iOS without doing anything, so the settings screen confirmed a
+  // choice that the incoming-call screen went on ignoring.
+  setIncomingCallRingtone: async (value: string) => {
+    if (Platform.OS === 'android') return bridge().setIncomingCallRingtone(value);
+    const setRingtone = vocivo().setRingtone;
+    if (!setRingtone) throw new Error('Install the latest Vocivo build to change the incoming call ringtone.');
+    return setRingtone.call(vocivo(), value);
+  },
   endCall: (id: string) => bridge().endCall(id),
   hideIncomingCallNotification: () => bridge().hideIncomingCallNotification(),
   toggleSpeaker: async () => {

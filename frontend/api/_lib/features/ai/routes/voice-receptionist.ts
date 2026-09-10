@@ -4,6 +4,7 @@ import { afterResponse, allowMobile, methodNotAllowed, publicError } from '../..
 import { listExtensions } from '../../organizations/pbx.js';
 import { pbxForOrganization, readPbxConfig } from '../../organizations/pbx-config-store.js';
 import { parseConversation, receptionistFor } from '../receptionist.js';
+import { seedTenantKnowledge } from '../company-knowledge/seed-tenant-knowledge.js';
 import { sipEdgeAuthorized } from '../../sip/sip-edge-auth.js';
 
 /**
@@ -30,6 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         config,
         tenantFor: (organizationId) => pbxForOrganization(config, organizationId),
         extensionsFor: (organizationId) => listExtensions(organizationId),
+        seedKnowledge: (organizationId) => seedTenantKnowledge(config, organizationId),
       });
       // 404 rather than an empty profile: the edge releases the call, which is
       // the honest outcome for a number no receptionist answers.

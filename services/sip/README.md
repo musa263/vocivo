@@ -68,11 +68,31 @@ The AOR lock covers contact lookup through transaction storage, so registration
 cannot fall between them. Each waiting entry has its own 45-second deadline;
 the queue expires independently and retains simultaneous callers.
 
+A suspended call answers its caller straight away with `180 Ringing`, before
+the push goes out. Without it the caller had only tm's automatic `100 Trying`
+— which starts no ringback and shows no state — for as long as the push, the
+app launch and the REGISTER took, while the callee's CallKit screen was already
+ringing; callers read that silence as a call that had not been placed. The
+provisional is issued *after* `t_suspend`, which keeps the `100 Trying` that
+`t_suspend` itself sends, and it carries no SDP so the caller generates its own
+ringback rather than having early media bridged through FreeSWITCH for a call
+that never touches it. The receiver's own 180 still travels afterwards under a
+different To-tag; that second early dialog is what any forking proxy produces.
+
 Never append receiver branches to a transaction left in `t_suspend`:
-Kamailio 5.8.4 discards responses while `T_ASYNC_SUSPENDED` remains set. That
-loses both the 180 that starts web/mobile caller ringback and the receiver's
-200 answer. The resumed route must not rerun `rtpengine_manage` in its failure
-context, which would delete the already-created media offer.
+Kamailio 5.8.4 discards the responses a *branch* sends back while
+`T_ASYNC_SUSPENDED` remains set. That loses both the 180 that starts web/mobile
+caller ringback and the receiver's 200 answer. A reply the script generates
+itself is not relayed from a branch and is unaffected. The resumed route must
+not rerun `rtpengine_manage` in its failure context, which would delete the
+already-created media offer.
+
+The 45-second ring window is measured from the INVITE, not from the push, so
+the push, the app launch and the REGISTER all come out of it. It is set in two
+places that have to move together — `t_set_max_lifetime` here and
+`WAKE_TTL_SECONDS` in `api/_lib/features/sip/routes/voice-sip-wakeup.ts` — and
+because ours starts earlier, a call answered in the last seconds of the phone's
+own ringing can find the transaction already gone.
 
 WebRTC offers/answers use `rtcp-mux-offer rtcp-mux-require` and
 `UDP/TLS/RTP/SAVPF`. The old `RTCP-MUX` flag was rejected by the running
@@ -208,6 +228,16 @@ before reading route fields. HTTP 403 denies admission; HTTP failures or missing
 route decisions return 503. A previous worker request's route can never authorize
 a later request whose HTTP lookup failed. The loopback gate covers timeout after
 success, denial, malformed responses, server failure, and recovery.
+
+The same hazard reaches the call records, and is handled the same way. A script
+variable belongs to a worker process rather than to a message and keeps its
+value until that process next writes it, so a reply or a failure — handled by
+whichever process received it, not the one that routed the INVITE — must not
+read the route token or the dialled user out of one. Both are passed to
+`CDR_ENQUEUE` in variables the enqueuing route sets, and the reply and failure
+routes set them empty: a record for an answered or failed call carries the
+call id, the parties and the event, and the API joins it to the INVITE's own
+row rather than to whatever that worker last saw.
 
 ## Inbound audio diagnostics
 
@@ -404,3 +434,15 @@ The hook's channel variables survive both FreeSWITCH application-expansion passe
 and are evaluated at hangup. `validate_outbox.py` injects HTTP 503, recreates the
 container on the same private volume, and verifies deletion only after HTTP 201.
 The [1.11.3 candidate build](freeswitch/image/README.md) uses these same gates.
+
+### Release state preservation
+
+`ops/prepare_release.py` is run by `sync-config` before recreating FreeSWITCH.
+It requires zero PBX channels and zero RTPEngine sessions, stops signaling,
+checks again for a newly arrived PBX call, and backs up private CDR/voicemail
+state under `/opt/vocivo/sip-state-backups`. Container-local files are copied
+into the new named volumes only when the destination is empty; differing mounts
+or nonempty migration targets abort for reconciliation. Failure restarts the old
+stack. Successful preparation leaves signaling stopped until FreeSWITCH passes
+readiness. Legacy `.failed` audio remains in the backup/volume for reconciliation.
+Do not prune these volumes or restore a pre-volume Compose file as a blind rollback.

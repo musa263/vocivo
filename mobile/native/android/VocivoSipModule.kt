@@ -29,7 +29,6 @@ import com.google.firebase.messaging.FirebaseMessaging
 class VocivoSipModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
   private val telecom by lazy { reactContext.getSystemService(Context.TELECOM_SERVICE) as TelecomManager }
-  private val audio by lazy { reactContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
   private var ringback: ToneGenerator? = null
   private var ringbackCallId: String? = null
 
@@ -82,6 +81,9 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
 
   override fun invalidate() {
     stopRingback()
+    // The module going away with a mute or a communication mode still set would
+    // leave both on the device, where every other app hears the consequences.
+    VocivoSipCallRegistry.releaseAudio()
     VocivoSipCallRegistry.detach()
     super.invalidate()
   }
@@ -145,6 +147,11 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
       }
       val address = Uri.fromParts(PhoneAccount.SCHEME_SIP, input.getString("handle") ?: callId, null)
       telecom.placeCall(address, extras)
+      // A dialled call needs the same phone-call foreground service an incoming
+      // one gets. Without it, a call backgrounded mid-conversation had nothing
+      // telling Android the app was on a call, and an aggressive OEM was free
+      // to kill it.
+      VocivoSipIncomingCall.startRuntime(reactContext, callId, wake = false)
       promise.resolve(null)
     } catch (error: SecurityException) {
       promise.reject("vocivo_sip_telecom", error.message ?: "Telecom refused the call", error)
@@ -178,8 +185,17 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
 
   @ReactMethod
   fun reportMuted(input: ReadableMap, promise: Promise) {
-    // The system call screen owns the microphone state for a self-managed call.
-    audio.isMicrophoneMute = input.getBoolean("muted")
+    val callId = input.getString("callId")
+    if (callId.isNullOrEmpty()) {
+      promise.reject("vocivo_sip_bad_call", "reportMuted needs a callId")
+      return
+    }
+    val muted = input.getBoolean("muted")
+    // Tell the connection first: the microphone mute is device-wide, so Telecom
+    // reports it straight back as a state change, and the connection has to
+    // know the change was ours before it treats it as the user's.
+    VocivoSipCallRegistry.connection(callId)?.applyMuted(muted)
+    VocivoSipCallRegistry.setMicrophoneMuted(reactContext, muted)
     promise.resolve(null)
   }
 
@@ -192,9 +208,9 @@ class VocivoSipModule(private val reactContext: ReactApplicationContext) : React
 
   @ReactMethod
   fun setSpeaker(on: Boolean, promise: Promise) {
-    audio.mode = AudioManager.MODE_IN_COMMUNICATION
-    @Suppress("DEPRECATION")
-    audio.isSpeakerphoneOn = on
+    // Through the registry, which is the one thing that outlives every call and
+    // can therefore put the audio mode back when the last of them ends.
+    VocivoSipCallRegistry.setSpeakerphone(reactContext, on)
     promise.resolve(null)
   }
 

@@ -124,3 +124,8 @@ released together for indicators; old clients do not publish availability.
 transactions. Carrier publication locks its pathname together with the trunk
 object, validates the merged PBX configuration, and invalidates this process's
 cache after commit. Single-object PBX writes keep their existing transaction path.
+
+The overview route reads BYOC inventory through the same publication/routing
+helpers as Phone numbers. A SIP overview does not depend on Telnyx balance or
+credential connection APIs. Its connection `active: null` explicitly means
+unmeasured live availability; it is not a positive health assertion.

@@ -469,7 +469,12 @@ export async function readTenantWallet(organizationId: string, currency = 'USD')
   return withDatabaseRetry(async (sql) => {
     await ensureWalletTables(sql);
     return sql.begin(async (transaction) => {
-      await setContext(transaction, organizationId, true);
+      // Tenant context, not platform: every query in here already filters on
+      // organization_id, but this ran with platform access, which turns the
+      // row-level isolation policy into a no-op for the one call every mobile
+      // bootstrap and every outbound route makes. The database guard is worth
+      // keeping precisely for the day a query here forgets its predicate.
+      await setContext(transaction, organizationId, false);
       await transaction`select pg_advisory_xact_lock(hashtext(${`vocivo:wallet:${organizationId}`}))`;
       await ensureWallet(transaction, organizationId, currency);
       const rows = await transaction<WalletRow[]>`

@@ -264,7 +264,7 @@ export function SettingsScreen({ onWallet }: { onWallet: () => void }) {
         <View style={styles.choice}>{(['Always available', 'Use office hours'] as const).map((schedule) => <Pressable key={schedule} onPress={() => setMyCalls((value) => ({ ...value, schedule }))} style={[styles.choiceButton, myCalls.schedule === schedule && styles.choiceActive]}><Text style={[styles.choiceText, myCalls.schedule === schedule && styles.choiceTextActive]}>{schedule}</Text></Pressable>)}</View>
         <Text style={styles.fieldHelp}>Outside your availability, calls go straight to voicemail (or to the number below) without ringing you.</Text>
         <Label>ALSO RING THIS NUMBER OR EXTENSION</Label>
-        <TextInput value={myCalls.simultaneousRing} onChangeText={(simultaneousRing) => setMyCalls((value) => ({ ...value, simultaneousRing }))} style={styles.field} keyboardType="phone-pad" placeholder="+1 212 555 0142 or 2002" placeholderTextColor={colors.textFaint} />
+        <TextInput value={myCalls.simultaneousRing} onChangeText={(simultaneousRing) => setMyCalls((value) => ({ ...value, simultaneousRing }))} style={styles.field} keyboardType="phone-pad" placeholder="Phone number with country code or extension" placeholderTextColor={colors.textFaint} />
         <Label>WHEN I CANNOT BE REACHED, SEND CALLS TO</Label>
         <TextInput value={myCalls.forwardUnavailable} onChangeText={(forwardUnavailable) => setMyCalls((value) => ({ ...value, forwardUnavailable }))} style={styles.field} keyboardType="phone-pad" placeholder="Leave empty for voicemail" placeholderTextColor={colors.textFaint} />
         {!!error && <Text style={styles.error}>{error}</Text>}

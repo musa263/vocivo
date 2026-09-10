@@ -5,8 +5,28 @@ import { wakeMobileDevices } from '../../push/mobile-push-dispatcher.js';
 import { sipEdgeAuthorized } from '../sip-edge-auth.js';
 import { sendIncomingCallWebPush } from '../../push/web-push-dispatcher.js';
 
-/** Matches the maximum incoming-call notification lifetime. */
+/**
+ * How long the handset rings when the edge does not say.
+ *
+ * The edge normally sends `ringUntil`, the absolute second at which the
+ * caller's transaction gives up, and that is the number to obey: counting 45
+ * seconds from the moment this push is dispatched always lands later than the
+ * caller's own deadline, because the push happens after the INVITE. The handset
+ * used to keep ringing past the point where the caller had already been
+ * released, and a call answered in that trailing window opened on the handset
+ * with nobody there — a caller who "cannot hear".
+ */
 const WAKE_TTL_SECONDS = 45;
+
+/** Seconds of ringing left, from an edge deadline, kept inside something sane. */
+function ringSecondsFrom(ringUntil: unknown, now = Date.now()) {
+  if (typeof ringUntil !== 'number' || !Number.isFinite(ringUntil)) return WAKE_TTL_SECONDS;
+  const remaining = Math.round(ringUntil - now / 1000);
+  // Below a few seconds there is no call worth ringing for: the caller is about
+  // to be given up on, and waking a phone to show a notification that cannot be
+  // answered in time is worse than not waking it.
+  return Math.max(0, Math.min(WAKE_TTL_SECONDS, remaining));
+}
 
 function text(value: unknown, max: number) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -24,6 +44,10 @@ export function createSipWakeupHandler(deps = { listExtensions, wakeMobileDevice
       const callerNumber = text(req.body?.from, 40);
       if (!username) return res.status(400).json({ error: 'A SIP username is required.' });
       if (!callId) return res.status(400).json({ error: 'A call ID is required.' });
+      const ringSeconds = ringSecondsFrom(req.body?.ringUntil);
+      // The caller has already given up, or is about to. Waking the phone now
+      // only produces a notification nobody can answer in time.
+      if (ringSeconds <= 0) return res.status(200).json({ woken: false, reason: 'the caller is no longer waiting' });
       const dispatch = async () => {
         const directory = await deps.listExtensions();
         const matches = directory.filter((item) => item.status === 'active' && item.sipUsername === username);
@@ -42,7 +66,7 @@ export function createSipWakeupHandler(deps = { listExtensions, wakeMobileDevice
               sipUsername: username,
               callerName: callerName || undefined,
               callerNumber: callerNumber || undefined,
-              ttlSeconds: WAKE_TTL_SECONDS,
+              ttlSeconds: ringSeconds,
             },
           }),
         ]);

@@ -100,7 +100,12 @@ export type NativeSipBridge = {
 };
 
 /** Events the native module emits through `NativeEventEmitter`. */
-export type SipRegistrationEvent = { state: 'none' | 'progress' | 'ok' | 'failed' | 'reconnecting'; reason?: string };
+/**
+ * `requested` marks a stop this app asked for — a sign-out, a disposal — as
+ * opposed to one the registrar or the network imposed. The two are the same
+ * state on the wire and very different to the person holding the phone.
+ */
+export type SipRegistrationEvent = { state: 'none' | 'progress' | 'ok' | 'failed' | 'reconnecting'; reason?: string; requested?: boolean };
 export type SipIncomingEvent = {
   callId: string;
   callerName?: string;

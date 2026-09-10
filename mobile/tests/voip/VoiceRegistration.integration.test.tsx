@@ -1,10 +1,21 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
+// The mock has to carry everything the modules under test reach for at import
+// time, not merely what the assertions use. This suite had been failing to load
+// at all — silently costing the registration path its only integration cover,
+// which is exactly the path push wake-ups and credential renewal run through —
+// because AuthContext builds a StyleSheet as a module-level constant and the
+// mock stopped at AppState.
 jest.mock('react-native', () => ({
   AppState: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
   NativeModules: { VocivoSip: {} },
   Platform: { OS: 'ios' },
+  StyleSheet: { create: (styles: Record<string, unknown>) => styles, flatten: (style: unknown) => style },
+  View: 'View',
+  Text: 'Text',
+  Pressable: 'Pressable',
+  ActivityIndicator: 'ActivityIndicator',
 }));
 jest.mock('@react-native-community/netinfo', () => ({
   __esModule: true, default: { addEventListener: jest.fn(() => jest.fn()) },
@@ -33,11 +44,14 @@ jest.mock('../../src/features/calling/runtime/voipClient', () => ({
   persistVoiceSession: jest.fn(async () => undefined),
   setVoiceSignedIn: jest.fn(async () => undefined),
   signOutVoiceDevice: jest.fn(async () => undefined),
+  voicePushDeviceId: jest.fn(async () => null),
+  rememberVoicePushDeviceId: jest.fn(async () => undefined),
   voipClient: { loginWithToken: jest.fn() },
 }));
 jest.mock('../../src/features/calling/runtime/sipNative', () => ({
   unregisterVocivoSip: jest.fn(async () => undefined),
   onSipRegistration: jest.fn(() => ({ remove: jest.fn() })),
+  onVocivoPushToken: jest.fn(() => ({ remove: jest.fn() })),
   refreshVocivoSip: jest.fn(async () => undefined),
   ensureSipRegistration: jest.fn(async () => 3600),
 }));
@@ -320,4 +334,23 @@ test('managed push launch saves the validated cached session before mounting its
   expect(inputs.onEngineSelected).toHaveBeenCalledWith('telnyx');
   expect(api.post).not.toHaveBeenCalledWith('/api/telnyx/token', expect.anything());
   expect(voipClient.loginWithToken).not.toHaveBeenCalled(); // The managed push runtime performs this login.
+});
+
+test('a handset that refuses notifications reports push unavailable and backs the poll off', async () => {
+  // No token is ever coming: notifications were declined. The poll used to run
+  // every two seconds for as long as the app lived, with the UI stuck on
+  // "registering" the whole time.
+  (getVoicePushToken as jest.Mock).mockResolvedValue(undefined);
+  try {
+    await act(async () => { tree = TestRenderer.create(<Probe />); });
+    expect(api.post).not.toHaveBeenCalledWith('/api/voice/devices', expect.anything());
+    await act(async () => { await jest.advanceTimersByTimeAsync(2000); });
+    expect(inputs.setPushRegistration).toHaveBeenLastCalledWith('unavailable');
+    const asked = (getVoicePushToken as jest.Mock).mock.calls.length;
+    // Five more minutes of an interval would be 150 further attempts.
+    await act(async () => { await jest.advanceTimersByTimeAsync(300_000); });
+    expect((getVoicePushToken as jest.Mock).mock.calls.length - asked).toBeLessThan(12);
+  } finally {
+    (getVoicePushToken as jest.Mock).mockResolvedValue('device-token');
+  }
 });

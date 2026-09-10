@@ -18,6 +18,7 @@ import { RatesView } from "./features/numbers/RatesView.jsx";
 import { SettingsView } from "./features/settings/SettingsView.jsx";
 import { OpeningScreen } from './shared/components/OpeningScreen.jsx';
 import './features/meetings/communications.css';
+import { showsOpeningScreen } from './shared/sessionBoot.js';
 
 const AdminConsole = lazy(() => import('./features/admin/AdminConsole'));
 const MeetingsView = lazy(() => import('./features/meetings/MeetingsView.jsx'));
@@ -201,7 +202,7 @@ export default function App() {
     } catch (error) { setVerificationError(error.message); } finally { setVerificationBusy(false); }
   }
   if (!session) return <Login onLogin={setSession} />;
-  if (loading) return <OpeningScreen name={profile?.full_name || initialSession?.profile?.full_name || ''} />;
+  if (showsOpeningScreen(loading, profile)) return <OpeningScreen name={profile?.full_name || initialSession?.profile?.full_name || ''} />;
   const navItems = [['dialer', Phone, 'Dialer'], ['history', History, 'Calls'], ...(shellData.profile?.account_type === 'business' ? [] : [['wallet', WalletCards, 'Top up']]), ['rates', Globe2, 'Countries'], ['settings', Settings, 'Settings'], ...(canAdmin ? [['admin', ShieldCheck, shellData.profile?.role === 'superadmin' ? 'Superadmin' : 'Company admin']] : [])];
   return (
     <div className={`app-shell ${view === 'admin' ? 'admin-mode' : ''}`}>
@@ -225,7 +226,7 @@ export default function App() {
       {view !== 'admin' && <nav className="mobile-nav">{navItems.map(([id, Icon, label]) => <button key={id} aria-label={label} title={label} className={view === id ? 'active' : ''} onClick={() => setView(id)}><Icon /><span>{label}</span></button>)}</nav>}
       <audio id="remoteMedia" autoPlay playsInline />
       {voice.incomingCall && <IncomingCall call={voice.incomingCall} onAnswer={voice.answer} onDecline={voice.decline} />}
-      {voice.active && <ActiveCall voice={voice} number={voice.dialedNumber} elapsed={elapsed} selectedNumber={selectedNumber} profile={shellData.profile} />}
+      {voice.active && <ActiveCall voice={voice} number={voice.dialedNumber} elapsed={elapsed} selectedNumber={currentCallerNumber} profile={shellData.profile} />}
     </div>
   );
 }

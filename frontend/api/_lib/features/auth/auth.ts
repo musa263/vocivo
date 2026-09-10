@@ -236,8 +236,20 @@ export async function requireAdmin(req: VercelRequest) {
   return adminAccessForSession(session);
 }
 
+/**
+ * Whether this session is Vocivo's own, rather than a customer's.
+ *
+ * One predicate, shared, because two of them drifted: the admin check accepted
+ * the owner role and the entitlement check did not, so a session with that role
+ * would be admitted as a platform administrator and then refused its
+ * entitlements.
+ */
+export function isPlatformOwnerSession(session: VocivoSession) {
+  return session.sub === 'vocivo-owner' && ['owner', 'superadmin'].includes(session.role || '');
+}
+
 export function adminAccessForSession(session: VocivoSession) {
-  const superadmin = session.sub === 'vocivo-owner' && ['owner', 'superadmin'].includes(session.role || '');
+  const superadmin = isPlatformOwnerSession(session);
   const companyAdmin = Boolean(session.organizationId && (session.extensionId || session.accountId) && ['company_owner', 'company_admin'].includes(session.role || ''));
   if (!superadmin && !companyAdmin) throw new Error('Forbidden');
   return { session, superadmin, organizationId: superadmin ? undefined : session.organizationId };
