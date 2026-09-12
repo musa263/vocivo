@@ -486,6 +486,24 @@ export async function readTenantWallet(organizationId: string, currency = 'USD')
   });
 }
 
+/** Ledger movements, not carrier call charges. Does not create a wallet or award credit. */
+export async function readWalletReport(organizationId: string, from: string, to: string) {
+  if (!organizationId || !Number.isFinite(Date.parse(from)) || !Number.isFinite(Date.parse(to))) throw new Error('Invalid wallet report scope');
+  return withDatabaseRetry(async sql => {
+    await ensureWalletTables(sql);
+    return sql.begin(async transaction => {
+      await setContext(transaction, organizationId, false);
+      const rows = await transaction<Array<{ currency: string; direction: string; entry_type: string; amount: string; entries: string }>>`
+        select currency, direction, entry_type, sum(amount_minor)::text as amount, count(*)::text as entries
+        from vocivo_wallet_entries where organization_id = ${organizationId}
+          and created_at >= ${from}::timestamptz and created_at < ${to}::timestamptz
+        group by currency, direction, entry_type order by currency, direction, entry_type
+      `;
+      return rows.map(row => ({ currency: row.currency, direction: row.direction, type: row.entry_type, amountMinor: row.amount, entries: Number(row.entries) }));
+    });
+  });
+}
+
 export async function readRetailRateDirectory<T extends { country_code: string; rate_per_min: number }>(baseRates: T[]): Promise<T[]> {
   return withDatabaseRetry<T[]>(async (sql) => {
     await ensureWalletTables(sql);

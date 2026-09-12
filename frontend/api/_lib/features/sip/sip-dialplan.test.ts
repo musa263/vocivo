@@ -339,6 +339,17 @@ test('a DID assigned to a ring group rings every active member at once with the 
   assert.ok(list.some((item) => item.data === 'vocivo_arg=ring_group:rg1'));
 });
 
+test('queue breaks exclude agents without disabling their direct extension', () => {
+  const queued = pbx({ numberAssignments: { [did]: { organizationId: 'acme', destinationType: 'queue', destinationId: 'q1' } } });
+  const normal = renderSipDialplan(input({ pbx: queued }));
+  assert.match(normal, /sofia\/external\/bob@/);
+  const paused = renderSipDialplan(input({ pbx: queued, queueBreakExtensionIds: ['e2'] }));
+  // Main-line fallback is a separate route and may still ring this user.
+  assert.doesNotMatch(paused, /vocivo_stage=queue/);
+  const direct = renderSipDialplan(input({ queueBreakExtensionIds: ['e2'], request: request({ stage: 'ext-select', digit: '2002' }) }));
+  assert.match(direct, /sofia\/external\/bob@/);
+});
+
 test('a queue announces the wait, rings in 45-second attempts, and gives up at maxWait', () => {
   const queued = pbx({ numberAssignments: { [did]: { organizationId: 'acme', destinationType: 'queue', destinationId: 'q1' } } });
   const first = actions(renderSipDialplan(input({ pbx: queued })));

@@ -19,6 +19,15 @@ cp /opt/vocivo-fs/autoload_configs/console.conf.xml /etc/freeswitch/autoload_con
 cp /opt/vocivo-fs/sip_profiles/external.xml /etc/freeswitch/sip_profiles/external.xml
 cp /opt/vocivo-fs/sip_profiles/internal.xml /etc/freeswitch/sip_profiles/internal.xml
 cp /opt/vocivo-fs/sip_profiles/trunk.xml /etc/freeswitch/sip_profiles/trunk.xml
+if [ "${VOCIVO_OPENAI_LIVE_ENABLED:-0}" = "1" ]; then
+  if [ ! -s /etc/freeswitch/tls/openai-live/agent.pem ] || [ ! -s /etc/freeswitch/tls/openai-live/cafile.pem ]; then
+    echo "Vocivo: provision verified OpenAI SIP TLS certificates before enabling GPT-Live" >&2
+    exit 1
+  fi
+  cp /opt/vocivo-fs/sip_profiles/openai-live.xml /etc/freeswitch/sip_profiles/openai-live.xml
+else
+  rm -f /etc/freeswitch/sip_profiles/openai-live.xml
+fi
 mkdir -p /etc/freeswitch/sip_profiles/carriers
 for gateway_file in /etc/freeswitch/sip_profiles/carriers/byoc_*.xml; do
   [ -f "$gateway_file" ] || continue
@@ -65,6 +74,9 @@ substitute() {
     }' "$3" > "$3.rendered" && mv "$3.rendered" "$3"
 }
 
+if [ -f /etc/freeswitch/sip_profiles/openai-live.xml ]; then
+  substitute '$${PUBLIC_IP}' "${PUBLIC_IP:-127.0.0.1}" /etc/freeswitch/sip_profiles/openai-live.xml
+fi
 for profile in /etc/freeswitch/sip_profiles/external.xml /etc/freeswitch/sip_profiles/trunk.xml; do
   substitute '$${TELNYX_SIP_HOST}' "${TELNYX_SIP_HOST:-sip.telnyx.com}" "$profile"
   substitute '$${TELNYX_SIP_REALM}' "${TELNYX_SIP_REALM:-sip.telnyx.com}" "$profile"

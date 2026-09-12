@@ -18,8 +18,16 @@ const data = {
   '/api/admin/saas': { platform: { name: 'Vocivo Communications' }, organizations: [organization], plans, featureCatalog },
   '/api/admin/extensions': { extensions: [] },
   '/api/admin/numbers': { numbers: [], orders: [], messagingProfiles: [] },
+  '/api/admin/number-routing': { numbers: [], targets: [], users: [], version: 'fixture' },
+  '/api/admin/carrier-trunks': { trunks: [], version: 'fixture' },
+  '/api/admin/voices': { voices: [], provider: { healthy: false } },
+  '/api/voice/settings': { config: { enabled: false, departments: [], voice: '', companyName: 'QA Company' } },
   '/api/admin/api-keys': { keys: [] },
   '/api/admin/events': { events: [] },
+  '/api/admin/operations': { fresh: false, observedAt: null, source: 'sip-edge', agents: [], calls: [], queues: [], counters: null },
+  '/api/admin/reports': { calls: [], timezone: 'UTC', complete: true, wallet: { available: true, rows: [] }, analytics: {
+    total: 0, answered: 0, incomplete: 0, durationSeconds: 0, hours: [], directions: { inbound: 0, outbound: 0, internal: 0 }, topExtensions: [], billing: { unpricedCalls: 0 },
+  } },
 };
 const browser = await chromium.launch({ headless: true });
 try {

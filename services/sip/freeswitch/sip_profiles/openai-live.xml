@@ -1,0 +1,23 @@
+<!-- Opt-in only. Certificate files are operator-provisioned; never checked into source. -->
+<profile name="openai-live">
+  <settings>
+    <param name="sip-ip" value="$${PUBLIC_IP}"/>
+    <param name="rtp-ip" value="$${PUBLIC_IP}"/>
+    <param name="sip-port" value="5092"/>
+    <param name="tls" value="true"/>
+    <param name="tls-only" value="true"/>
+    <param name="tls-sip-port" value="5093"/>
+    <param name="tls-version" value="tlsv1.2"/>
+    <param name="tls-verify-policy" value="out"/>
+    <param name="tls-verify-date" value="true"/>
+    <param name="tls-cert-dir" value="/etc/freeswitch/tls/openai-live"/>
+    <param name="dialplan" value="XML"/>
+    <param name="context" value="public"/>
+    <param name="auth-calls" value="false"/>
+    <param name="apply-inbound-acl" value="loopback.auto"/>
+    <param name="inbound-codec-prefs" value="PCMU,PCMA"/>
+    <param name="outbound-codec-prefs" value="PCMU,PCMA"/>
+    <param name="manage-presence" value="false"/>
+    <param name="sip-trace" value="no"/>
+  </settings>
+</profile>

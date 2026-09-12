@@ -1,12 +1,15 @@
 # Vocivo receptionist
 
-The AI receptionist, running on Vocivo's own hardware.
+The coordinator runs on Vocivo's hardware. `RECEPTIONIST_PROVIDER` defaults to
+`local`; optional `openai-live` sends the AI leg's audio to OpenAI. See
+[GPT-Live activation](../../docs/runbooks/openai-live-receptionist.md). The local
+architecture below does not describe GPT-Live's external processing.
 
 Every part of a call is handled here except one. FreeSWITCH carries the audio,
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) hears what the
 caller said, and the Kokoro service on the same droplet says the reply. Only
 the language-model turn leaves the machine, as one HTTPS request carrying the
-conversation. Nothing is sent to a carrier, nothing is billed per minute, and temporary caller recordings stay on infrastructure Vocivo controls. The
+conversation. Temporary local caller recordings stay on infrastructure Vocivo controls; PSTN and model charges remain separate. The
 conversation text and tenant brief are sent to the configured language-model provider;
 transcripts are also filed to the Vocivo API.
 

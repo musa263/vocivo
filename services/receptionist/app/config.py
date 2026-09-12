@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import base64
 from dataclasses import dataclass
 
 
@@ -20,6 +22,13 @@ class Settings:
     #: can answer calls. The droplet has no host firewall.
     listen_host: str = "127.0.0.1"
     listen_port: int = 8084
+    provider: str = "local"
+    openai_api_key: str = ""
+    openai_webhook_secret: str = ""
+    openai_sip_uri: str = ""
+    openai_voice: str = "marin"
+    openai_backend_model: str = "gpt-5.6-luna"
+    openai_webhook_port: int = 8091
 
     #: Vocivo's own speech engine. Loopback on the SIP edge; the public URL
     #: only exists for the web app.
@@ -57,8 +66,8 @@ class Settings:
     stt_concurrency: int = 2
     stt_queue_seconds: float = 12.0
 
-    #: The one part that is not self-hosted. Everything else in the call path
-    #: — telephony, speech recognition, the voice — runs on Vocivo hardware.
+    #: Local provider's reasoning service. The optional OpenAI Live provider
+    #: also sends call audio to OpenAI and does not use these settings.
     llm_api_key: str = ""
     llm_model: str = "claude-haiku-4-5"
     llm_base_url: str = "https://api.anthropic.com"
@@ -125,6 +134,13 @@ class Settings:
         return cls(
             listen_host=text("RECEPTIONIST_HOST", cls.listen_host),
             listen_port=number("RECEPTIONIST_PORT", cls.listen_port),
+            provider=text("RECEPTIONIST_PROVIDER", cls.provider),
+            openai_api_key=text("OPENAI_API_KEY", ""),
+            openai_webhook_secret=text("OPENAI_WEBHOOK_SECRET", ""),
+            openai_sip_uri=text("OPENAI_LIVE_SIP_URI", ""),
+            openai_voice=text("OPENAI_LIVE_VOICE", cls.openai_voice),
+            openai_backend_model=text("OPENAI_LIVE_BACKEND_MODEL", cls.openai_backend_model),
+            openai_webhook_port=number("OPENAI_LIVE_WEBHOOK_PORT", cls.openai_webhook_port),
             tts_url=text("TTS_SERVICE_URL", cls.tts_url).rstrip("/"),
             tts_secret=text("TTS_SERVICE_SECRET", ""),
             tts_voice=text("TTS_VOICE", cls.tts_voice),
@@ -165,6 +181,30 @@ class Settings:
     def missing(self) -> list[str]:
         """Names of the settings without which a call cannot be handled."""
         gaps = []
+        if self.listen_host != '127.0.0.1':
+            gaps.append('RECEPTIONIST_HOST must be loopback')
+        if self.provider not in {'local', 'openai-live'}:
+            gaps.append('RECEPTIONIST_PROVIDER must be local or openai-live')
+        if self.provider == 'openai-live':
+            if not self.openai_api_key:
+                gaps.append('OPENAI_API_KEY')
+            if not self.openai_webhook_secret:
+                gaps.append('OPENAI_WEBHOOK_SECRET')
+            else:
+                try:
+                    if len(base64.b64decode(self.openai_webhook_secret.removeprefix('whsec_'), validate=True)) < 16:
+                        raise ValueError('Short secret')
+                except ValueError:
+                    gaps.append('OPENAI_WEBHOOK_SECRET (valid base64 signing key)')
+            if not re.fullmatch(r'sip:proj_[A-Za-z0-9_-]+@sip(?:-eu)?\.api\.openai\.com;transport=tls', self.openai_sip_uri):
+                gaps.append('OPENAI_LIVE_SIP_URI (verified project SIP URI with TLS)')
+            if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', self.openai_voice):
+                gaps.append('OPENAI_LIVE_VOICE')
+            if not 1024 <= self.openai_webhook_port <= 65535 or self.openai_webhook_port == self.listen_port:
+                gaps.append('OPENAI_LIVE_WEBHOOK_PORT')
+            if not self.api_secret:
+                gaps.append('SIP_EDGE_SECRET')
+            return gaps
         if not self.tts_secret:
             gaps.append("TTS_SERVICE_SECRET")
         if not self.llm_api_key:

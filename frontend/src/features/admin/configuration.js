@@ -11,17 +11,17 @@ export const countryOptions = buildDialingDirectory();
 
 export const platformNav = [
   { group: 'VOCIVO PLATFORM', items: [['platform-dashboard', Activity, 'Overview'], ['organizations', Building2, 'Customers'], ['subscriptions', BellRing, 'Subscriptions'], ['wallets', WalletCards, 'Wallets & pricing'], ['feature-access', LockKeyhole, 'Feature access']] },
-  { group: 'CUSTOMER WORKSPACE', items: [['dashboard', PhoneCall, 'Phone system'], ['users', Users, 'Users'], ['numbers', PhoneIncoming, 'Phone numbers'], ['voice', Bot, 'Voice & AI'], ['outbound', Route, 'Outbound rules'], ['hours', CalendarClock, 'Office hours'], ['handling', GitBranch, 'Call handling'], ['reports', BarChart3, 'Reports'], ['events', FileClock, 'Event log']] },
+  { group: 'CUSTOMER WORKSPACE', items: [['dashboard', PhoneCall, 'Phone system'], ['users', Users, 'Users'], ['numbers', PhoneIncoming, 'Phone numbers'], ['voice', Bot, 'Voice & AI'], ['outbound', Route, 'Outbound rules'], ['hours', CalendarClock, 'Office hours'], ['handling', GitBranch, 'Call handling'], ['operations', Activity, 'Live operations'], ['reports', BarChart3, 'Reports'], ['events', FileClock, 'Event log']] },
   { group: 'PLATFORM SYSTEM', items: [['trunks', Network, 'Carrier & SIP'], ['developer', KeyRound, 'Developer API'], ['system', Settings2, 'Settings'], ['security', ShieldCheck, 'Password & security']] },
 ];
 
 export const customerNav = [
   { group: 'COMPANY', items: [['dashboard', Activity, 'Overview'], ['users', Users, 'Users'], ['numbers', PhoneIncoming, 'Phone numbers'], ['voice', Bot, 'Voice & AI']] },
   { group: 'ROUTING', items: [['outbound', Route, 'Outbound rules'], ['hours', CalendarClock, 'Office hours'], ['handling', GitBranch, 'Call handling']] },
-  { group: 'INSIGHTS', items: [['reports', BarChart3, 'Reports'], ['events', FileClock, 'Event log']] },
+  { group: 'INSIGHTS', items: [['operations', Activity, 'Live operations'], ['reports', BarChart3, 'Reports'], ['events', FileClock, 'Event log']] },
   { group: 'CONNECTIVITY', items: [['trunks', Network, 'SIP trunks'], ['developer', KeyRound, 'Developer API'], ['system', Settings2, 'Company settings'], ['security', ShieldCheck, 'Password & security']] },
 ];
 
-export const sectionFeatures = { numbers: 'phoneNumbers', voice: 'aiReceptionist', outbound: 'outboundCalling', handling: 'queues', reports: 'analytics', events: 'analytics', trunks: 'sipTrunks', developer: 'developerApi' };
+export const sectionFeatures = { operations: 'analytics', numbers: 'phoneNumbers', voice: 'aiReceptionist', outbound: 'outboundCalling', handling: 'queues', reports: 'analytics', events: 'analytics', trunks: 'sipTrunks', developer: 'developerApi' };
 
 export const uid = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;

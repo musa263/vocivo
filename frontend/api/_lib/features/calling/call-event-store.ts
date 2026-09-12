@@ -112,3 +112,29 @@ export async function listCompleteTenantCallEvents(organizationId: string) {
   } while (cursor);
   return [...new Map(events.map(event => [event.id, event])).values()];
 }
+
+/** Bounded newest-first scan; incomplete coverage is surfaced, never presented as a complete report. */
+export async function listReportingEvents(organizationId: string, since: number, maxEvents = 20_000) {
+  await migrateCallEvents(organizationId);
+  const prefix = `vocivo/call-events/v3/${tenantStorageKey(organizationId)}/`;
+  const events: StoredCallEvent[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await list({ prefix, cursor, limit: Math.min(1000, maxEvents - events.length) });
+    const objects = await readObjects(page.blobs.map(item => item.pathname));
+    let reachedStart = false;
+    for (const blob of page.blobs) {
+      const value = objects.get(blob.pathname);
+      if (!value) throw new Error('Report event disappeared during read');
+      const event = decrypt(value);
+      if (event.organizationId !== organizationId) throw new Error('Report tenant mismatch');
+      if (Date.parse(event.event_timestamp) < since) reachedStart = true;
+      else events.push(event);
+    }
+    if (reachedStart || !page.hasMore) return { events, complete: true };
+    if (events.length >= maxEvents) return { events, complete: false };
+    cursor = page.cursor;
+    if (!cursor) throw new Error('Report pagination cursor missing');
+  } while (cursor);
+  return { events, complete: true };
+}

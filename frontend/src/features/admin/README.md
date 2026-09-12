@@ -14,7 +14,8 @@ It is no longer the implementation of every admin screen. Page folders are:
 - `ai/`: voice/receptionist configuration.
 - `routing/`: outbound rules, office hours and call handling.
 - `numbers/`: company number and trunk setup.
-- `diagnostics/`: reports and events.
+- `diagnostics/`: events.
+- `operations/`: live registrations/calls/queues, agent states and reports.
 - `settings/`: system and password/security settings.
 - `platform/`: platform dashboard, companies, subscriptions, feature access and API keys.
 - `WalletsPage.jsx`: platform/customer wallet management.

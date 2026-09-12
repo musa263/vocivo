@@ -13,9 +13,8 @@ from .config import Settings
 
 log = logging.getLogger("vocivo.brain")
 
-# The only step in a call that leaves Vocivo's own hardware. Telephony, speech
-# recognition and the voice are all self-hosted; this is one request per turn to
-# a language model, and it carries the conversation and nothing else.
+# Local provider's reasoning adapter. OpenAI Live has a separate audio path
+# in live.py; its audio and delegated company context leave the SIP host.
 
 Action = Literal["speak", "transfer", "message", "wrap_up"]
 
@@ -47,6 +46,7 @@ class Assistant:
     #: Spoken form of the opening hours, e.g. "Monday to Friday, 9 am to 5 pm."
     office_hours: str = ""
     timezone: str = ""
+    organization_id: str = ""
 
     @classmethod
     def from_api(cls, payload: dict[str, Any]) -> "Assistant":
@@ -67,6 +67,7 @@ class Assistant:
             office_open=payload.get("officeOpen", True) is not False,
             office_hours=str(payload.get("officeHoursText") or ""),
             timezone=str(payload.get("timezone") or ""),
+            organization_id=str(payload.get("organizationId") or ""),
         )
 
 

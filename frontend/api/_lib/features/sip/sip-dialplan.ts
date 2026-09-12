@@ -115,6 +115,8 @@ export type SipDialplanInput = {
   pbx: PbxConfig;
   business: BusinessVoiceConfig;
   extensions: ExtensionUser[];
+  /** Persisted queue breaks do not disable direct extension calls or ring groups. */
+  queueBreakExtensionIds?: string[];
   apiUrl: string;
   secret: string;
   promptFormat: 'wav' | 'mp3';
@@ -446,13 +448,14 @@ function groupFor(input: SipDialplanInput, kind: GroupKind, id: string) {
 
 function groupFallbackActions(input: SipDialplanInput, kind: GroupKind, id: string) {
   const group = groupFor(input, kind, id);
-  if (group?.fallback === 'Main line') return mainLineActions(input);
-  return unavailableActions(input, true);
+  if (group?.fallback === 'Main line') return [set('vocivo_queue_id', ''), ...mainLineActions(input)];
+  return [set('vocivo_queue_id', ''), ...unavailableActions(input, true)];
 }
 
 function groupActions(input: SipDialplanInput, kind: GroupKind, id: string, attempt: number) {
   const group = groupFor(input, kind, id);
-  const members = group ? activeExtensions(input).filter((item) => group.members.includes(item.id)) : [];
+  const members = group ? activeExtensions(input).filter((item) => group.members.includes(item.id)
+    && (kind !== 'queue' || !input.queueBreakExtensionIds?.includes(item.id))) : [];
   if (!group || !members.length) return groupFallbackActions(input, kind, id);
   if (kind === 'ring_group') {
     const timeout = Math.min(120, Math.max(10, 'timeout' in group ? group.timeout || 25 : 25));
@@ -466,7 +469,7 @@ function groupActions(input: SipDialplanInput, kind: GroupKind, id: string, atte
   const remaining = maxWait - attempt * queueAttemptSeconds;
   if (remaining <= 0) return transferToStage('after-group', { arg: `${kind}:${id}` });
   const nextAttempt = attempt + 1;
-  const actions: Action[] = [];
+  const actions: Action[] = [set('vocivo_queue_id', id)];
   if (attempt === 0) actions.push(playback(input, input.business.waitingMessage), set('vocivo_waiting', '1'));
   actions.push(...bridgeActions(input, members.map(contact), Math.min(queueAttemptSeconds, remaining), { announceWaiting: false }));
   if (nextAttempt < attempts) {

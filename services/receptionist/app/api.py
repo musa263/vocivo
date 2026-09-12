@@ -82,7 +82,7 @@ class VocivoApi:
         except (ValueError, TypeError, AttributeError) as error:
             raise AssistantUnavailable("Invalid receptionist configuration") from error
 
-    async def record_conversation(self, payload: dict[str, Any]) -> None:
+    async def record_conversation(self, payload: dict[str, Any]) -> bool:
         """Best effort: a call that happened matters more than its record of it."""
         try:
             response = await self._client.post(
@@ -91,5 +91,7 @@ class VocivoApi:
                 json=payload,
             )
             response.raise_for_status()
+            return True
         except httpx.HTTPError as error:
             log.warning("could not file conversation %s (%s)", str(payload.get("callId", ""))[:8], type(error).__name__)
+            return False

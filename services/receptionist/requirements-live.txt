@@ -1,0 +1,2 @@
+# Install alongside requirements.txt for the optional GPT-Live runtime.
+aiohttp==3.14.3

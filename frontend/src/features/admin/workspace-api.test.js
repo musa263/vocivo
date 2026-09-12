@@ -29,3 +29,14 @@ test('stale callbacks neither submit old forms nor publish delayed responses', a
   assert.equal(calls, 1);
   await assert.rejects(workspaceApi(() => assert.fail('must not send'), '')('/api/admin/pbx'), /workspace changed/);
 });
+
+test('operations and reports retain explicit tenant binding and date filters', async () => {
+  const paths = [];
+  const api = workspaceApi(async path => { paths.push(path); return {}; }, 'company-two');
+  await api('/api/admin/operations', { method: 'PATCH', body: { extensionId: 'member', state: 'on_break', version: 1 } });
+  await api('/api/admin/reports?from=2026-09-01&timezone=UTC');
+  assert.equal(new URL(paths[0], 'https://local').searchParams.get('organizationId'), 'company-two');
+  const report = new URL(paths[1], 'https://local');
+  assert.equal(report.searchParams.get('organizationId'), 'company-two');
+  assert.equal(report.searchParams.get('from'), '2026-09-01');
+});

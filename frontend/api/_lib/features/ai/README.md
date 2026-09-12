@@ -1,5 +1,9 @@
 # AI Receptionist and Speech
 
+The optional OpenAI `gpt-live-1` runtime is configured on the SIP host, not by
+the local TTS voice picker. It keeps tenant policy/transfer validation here.
+See [activation, privacy and acceptance gates](../../../../../docs/runbooks/openai-live-receptionist.md).
+
 `receptionist.ts::receptionistFor` resolves tenant-specific AI settings and transfer
 targets. `transferTargets` uses active directory users. `parseConversation`
 validates the conversation contract. `routes/voice-receptionist.ts` is the service

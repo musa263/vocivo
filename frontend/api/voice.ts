@@ -30,6 +30,7 @@ import sipHangup from './_lib/features/sip/routes/voice-sip-hangup.js';
 import preferences from './_lib/features/calling/routes/voice-preferences.js';
 import presence from './_lib/features/calling/routes/voice-presence.js';
 import meetings from './_lib/features/meetings/routes/voice-meetings.js';
+import telemetry from './_lib/features/operations/routes/voice-telemetry.js';
 
 type VoiceHandler = (req: VercelRequest, res: VercelResponse) => unknown;
 
@@ -65,6 +66,7 @@ const routes: Readonly<Record<string, VoiceHandler>> = Object.freeze({
   preferences,
   presence,
   meetings,
+  telemetry,
 });
 
 export default function handler(req: VercelRequest, res: VercelResponse) {

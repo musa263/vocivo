@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -r
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# The Live adapter is installed independently; choosing it remains an explicit runtime setting.
+COPY requirements-live.txt .
+RUN pip install --no-cache-dir -r requirements-live.txt
 COPY app ./app
 RUN mkdir -p /var/lib/vocivo-receptionist
 EXPOSE 8084

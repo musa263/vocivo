@@ -30,6 +30,7 @@ export async function renderSipOutbound(request: XmlCurlRequest, config: PbxConf
   return document([
     action('set', 'hangup_after_bridge=true'),
     action('set', `vocivo_org=${admitted.organizationId.replace(/[^A-Za-z0-9_-]/g, '')}`),
+    action('set', 'vocivo_report_direction=outbound'),
     action('set', `effective_caller_id_number=${admitted.callerId}`),
     action('set', 'effective_caller_id_name=Vocivo'),
     action('set', 'sip_cid_type=pid'),

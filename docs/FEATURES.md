@@ -12,6 +12,7 @@ where they implement the same domain; they are not separate copies of one module
 | Companies, users, subscriptions, access | [organizations](../frontend/api/_lib/features/organizations/README.md) | [admin](../frontend/src/features/admin/README.md) | [organizations](../mobile/src/features/organizations/README.md) |
 | Calling, history, lifecycle | [calling](../frontend/api/_lib/features/calling/README.md) | [calling](../frontend/src/features/calling/README.md) | [calling](../mobile/src/features/calling/README.md) |
 | SIP authentication, dialplan, CDR | [sip](../frontend/api/_lib/features/sip/README.md) | Calling engine | Calling engine + native |
+| Agents, live registrations/queues, call analytics | [operations](../frontend/api/_lib/features/operations/README.md) | [operations](../frontend/src/features/admin/operations/README.md) | Admin web view |
 | Wallet, rates, usage | [billing](../frontend/api/_lib/features/billing/README.md) | [billing](../frontend/src/features/billing/README.md) | [billing](../mobile/src/features/billing/README.md) |
 | Phone numbers, caller IDs, trunks | [numbers](../frontend/api/_lib/features/numbers/README.md) | [numbers](../frontend/src/features/numbers/README.md) | Calling screens |
 | SMS | [messaging](../frontend/api/_lib/features/messaging/README.md) | Platform APIs | [messaging](../mobile/src/features/messaging/README.md) |

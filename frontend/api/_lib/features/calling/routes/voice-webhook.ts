@@ -20,6 +20,7 @@ import { verifyTelnyxWebhook } from '../../../shared/telnyx-webhook-auth.js';
 import { quarantineSecurityEvent } from '../../../shared/security-quarantine.js';
 import { storeCallEvent } from '../call-event-store.js';
 import { claimQueueCallStatus, clearQueueCall, readQueueCall, saveQueueCall } from '../queue-call-store.js';
+import { agentStore } from '../../operations/agent-store.js';
 import { clearConferenceCall, isConferenceEnded, markConferenceEnded, readConferenceCall, saveConferenceCall } from '../conference-call-store.js';
 import { forwardingTargetForCause, userNoAnswerSeconds, userVoicemailEnabled } from '../../organizations/user-call-routing.js';
 import { officeHoursDecision, userAvailableBySchedule } from '../../organizations/office-hours.js';
@@ -340,7 +341,8 @@ async function routeToCallGroup(input: {
   const pbx = pbxForOrganization(basePbx, input.organizationId);
   const collection = input.kind === 'ring_group' ? pbx.callHandling.ringGroups : pbx.callHandling.queues;
   const group = collection.find((item) => item.id === input.handlingId);
-  const members = group ? extensions.filter((extension) => group.members.includes(extension.id) && extension.status === 'active' && extension.sipUsername) : [];
+  const breaks = input.kind === 'queue' ? (await agentStore.read(input.organizationId, extensions.map(e => e.id))).filter(a => a.state === 'on_break').map(a => a.extensionId) : [];
+  const members = group ? extensions.filter((extension) => group.members.includes(extension.id) && extension.status === 'active' && extension.sipUsername && !breaks.includes(extension.id)) : [];
   if (!group || !members.length) {
     await routeCallGroupFallback(input);
     return;
@@ -925,7 +927,8 @@ export function createVoiceWebhookHandler(dependencies: Partial<typeof webhookDe
       const organizationId = state.organizationId;
       const pbx = await readPbxConfig();
       const [config, extensions] = await Promise.all([readBusinessVoiceConfig(organizationId), listExtensions(organizationId)]);
-      const members = extensions.filter((extension) => state.targetExtensionIds?.includes(extension.id) && extension.status === 'active' && extension.sipUsername);
+      const breaks = queue.kind === 'queue' ? (await agentStore.read(organizationId, extensions.map(e => e.id))).filter(a => a.state === 'on_break').map(a => a.extensionId) : [];
+      const members = extensions.filter((extension) => state.targetExtensionIds?.includes(extension.id) && extension.status === 'active' && extension.sipUsername && !breaks.includes(extension.id));
       if (!members.length) {
         await clearQueueCall(state.queueName);
         await callAction(callControlId, 'leave_queue', { command_id: `${eventId}-empty-queue` }).catch((error) => logWebhookFailure('leave empty queue', error));

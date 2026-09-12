@@ -54,6 +54,7 @@ services:
       - ./kamailio/usrloc-init.sql:/etc/kamailio/usrloc-init.sql:ro
       - ./kamailio/docker-entrypoint.sh:/entrypoint.sh:ro
       - kamailio-usrloc:/var/lib/kamailio
+      - monitoring-rpc:/run/vocivo-monitor
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
 
   freeswitch:
@@ -61,6 +62,7 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
+      VOCIVO_OPENAI_LIVE_ENABLED: ${VOCIVO_OPENAI_LIVE_ENABLED:-0}
       VOCIVO_API_URL: ${VOCIVO_API_URL:-https://vocivo.app}
       SIP_EDGE_SECRET: ${SIP_EDGE_SECRET:?SIP_EDGE_SECRET is required}
       TELNYX_SIP_HOST: ${TELNYX_SIP_HOST:-sip.telnyx.com}
@@ -107,6 +109,24 @@ services:
       - freeswitch-data:/var/lib/vocivo
     command: [python3, /app/outbox.py]
 
+  sip-monitor:
+    image: python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a
+    profiles: [monitoring]
+    restart: unless-stopped
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      VOCIVO_API_URL: ${VOCIVO_API_URL:-https://vocivo.app}
+      SIP_EDGE_SECRET: ${SIP_EDGE_SECRET:?SIP_EDGE_SECRET is required}
+      PYTHONDONTWRITEBYTECODE: '1'
+    volumes:
+      - ./monitor/collector.py:/app/collector.py:ro
+      - monitoring-rpc:/run/vocivo-monitor
+      - freeswitch-etc:/fs-config:ro
+    command: [python3, /app/collector.py]
+
   coturn:
     image: coturn/coturn:4.6
     restart: unless-stopped
@@ -136,6 +156,7 @@ services:
       - --denied-peer-ip=192.168.0.0-192.168.255.255
 
 volumes:
+  monitoring-rpc:
   freeswitch-cdr:
   freeswitch-data:
   freeswitch-etc:

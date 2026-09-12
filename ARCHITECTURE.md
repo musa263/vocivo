@@ -19,6 +19,7 @@ Vercel API -> PostgreSQL
                                            +-> FreeSWITCH -> tenant carrier / managed trunk -> PSTN
                                                   |
                                                   +-> Python receptionist / TTS
+                                                  +-> optional OpenAI GPT-Live SIP/SRTP B leg
 ```
 
 `frontend/api/_lib/features/calling/voice-provider.ts::voiceEdge()` selects SIP
@@ -44,6 +45,13 @@ PSTN/SMS and, when selected, the managed calling engine. Internal SIP-edge calls
 bypass Telnyx credit checks; managed-edge calls still depend on carrier service.
 
 ## Source Organization
+
+Optional SIP monitoring samples registrar/dialog/FreeSWITCH state into encrypted
+tenant snapshots for admin operations. It expires missing telemetry rather than
+equating it to zero. See `services/sip/monitor/README.md`. The optional GPT-Live
+receptionist sends AI audio/context to OpenAI while FreeSWITCH retains caller
+control; see `docs/runbooks/openai-live-receptionist.md`. Neither service is
+activated by deploying Vercel alone.
 
 - `frontend/src/features/<feature>/`: web screens, components, hooks and helpers.
 - `frontend/api/_lib/features/<feature>/`: backend domain, stores, tests and `routes/`.

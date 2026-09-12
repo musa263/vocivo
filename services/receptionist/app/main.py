@@ -24,11 +24,18 @@ async def serve() -> None:
         # Fail at start-up rather than halfway through a stranger's call.
         raise SystemExit(f"the receptionist cannot start without: {', '.join(missing)}")
 
-    voice = Voice(settings)
-    ears = Ears(settings)
-    brain = Brain(settings)
     api = VocivoApi(settings)
-    handler = CallHandler(settings, voice, ears, brain, api)
+    live = None
+    voice = ears = brain = None
+    if settings.provider == 'openai-live':
+        from .live import LiveHandler
+        live = LiveHandler(settings, api)
+        handler = live
+    else:
+        voice = Voice(settings)
+        ears = Ears(settings)
+        brain = Brain(settings)
+        handler = CallHandler(settings, voice, ears, brain, api)
 
     calls: set[asyncio.Task] = set()
     server = None
@@ -52,11 +59,15 @@ async def serve() -> None:
             calls.discard(task)
 
     try:
-        log.info("warming the speech recogniser")
-        await ears.warm()
+        if live is not None:
+            await live.start()
+        else:
+            log.info("warming the speech recogniser")
+            await ears.warm()
         # Rendered prompts accumulate on the same disk the switch runs on, so
         # they are swept on a timer for as long as the service is up.
-        janitor = asyncio.create_task(voice.run_cache_janitor())
+        if voice is not None:
+            janitor = asyncio.create_task(voice.run_cache_janitor())
         server = await asyncio.start_server(on_connection, settings.listen_host, settings.listen_port)
         where = ", ".join(str(socket.getsockname()) for socket in server.sockets or [])
         log.info("receptionist listening for FreeSWITCH on %s", where)
@@ -78,7 +89,8 @@ async def serve() -> None:
         for name in registered_signals:
             loop.remove_signal_handler(name)
         # Calls finish filing their transcripts before their HTTP clients close.
-        await asyncio.gather(voice.close(), brain.close(), api.close(), return_exceptions=True)
+        resources = [resource for resource in [live, voice, brain, api] if resource is not None]
+        await asyncio.gather(*(resource.close() for resource in resources), return_exceptions=True)
 
 
 async def drain_calls(calls: set[asyncio.Task], grace_seconds: float = 5.0) -> None:

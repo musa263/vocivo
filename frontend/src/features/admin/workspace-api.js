@@ -1,6 +1,7 @@
 const workspacePaths = new Set([
   '/api/admin/pbx', '/api/admin/ai', '/api/admin/extensions', '/api/admin/overview',
   '/api/admin/events', '/api/admin/api-keys', '/api/admin/numbers', '/api/admin/trunks',
+  '/api/admin/operations', '/api/admin/reports',
   '/api/admin/carrier-trunks', '/api/admin/number-routing', '/api/admin/background', '/api/voice/settings', '/api/telnyx/verified-numbers',
 ]);
 

@@ -10,6 +10,7 @@ import { sipInboundEnabled } from '../../calling/voice-provider.js';
 import { carrierTrunks } from '../../numbers/carrier-trunk-store.js';
 import { carrierReadiness, resolveInboundNumber, resolveCarrierOutbound } from '../../numbers/carrier-runtime.js';
 import { outboundUnavailable, renderSipOutbound } from '../sip-outbound-dialplan.js';
+import { agentStore } from '../../operations/agent-store.js';
 
 /**
  * mod_xml_curl dialplan binding for the self-hosted SIP edge.
@@ -72,6 +73,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       readBusinessVoiceConfig(organizationId),
       listExtensions(organizationId),
     ]);
+    const queueMembers = new Set(pbxForOrganization(config, organizationId).callHandling.queues.flatMap(q => q.members));
+    const agents = queueMembers.size ? await agentStore.read(organizationId, extensions.filter(e => queueMembers.has(e.id)).map(e => e.id)) : [];
     const xml = renderSipDialplan({
       request,
       organizationId,
@@ -79,6 +82,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       pbx: pbxForOrganization(config, organizationId),
       business,
       extensions,
+      queueBreakExtensionIds: agents.filter(a => a.state === 'on_break').map(a => a.extensionId),
       apiUrl: requiredEnv('VITE_APP_URL'),
       secret: requiredEnv('SIP_EDGE_SECRET'),
       promptFormat: process.env.TTS_SERVICE_URL?.trim() ? 'wav' : 'mp3',
